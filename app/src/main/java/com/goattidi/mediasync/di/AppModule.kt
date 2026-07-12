@@ -1,0 +1,52 @@
+package com.goattidi.mediasync.di
+
+import android.content.ContentResolver
+import android.content.Context
+import androidx.room.Room
+import com.goattidi.mediasync.data.db.AppDatabase
+import com.goattidi.mediasync.data.db.SyncRecordDao
+import com.goattidi.mediasync.data.drive.DriveAuthProvider
+import com.goattidi.mediasync.data.drive.DriveClient
+import com.goattidi.mediasync.data.drive.DriveUploader
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
+import javax.inject.Singleton
+
+@Module
+@InstallIn(SingletonComponent::class)
+object AppModule {
+
+    @Provides
+    @Singleton
+    fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
+        Room.databaseBuilder(context, AppDatabase::class.java, "goattidi.db").build()
+
+    @Provides
+    fun provideSyncRecordDao(db: AppDatabase): SyncRecordDao = db.syncRecordDao()
+
+    @Provides
+    fun provideContentResolver(@ApplicationContext context: Context): ContentResolver =
+        context.contentResolver
+
+    @Provides
+    @Singleton
+    fun provideOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .build()
+
+    @Provides
+    @Singleton
+    fun provideDriveClient(auth: DriveAuthProvider, http: OkHttpClient): DriveClient =
+        DriveClient(auth, http)
+
+    @Provides
+    @Singleton
+    fun provideDriveUploader(client: DriveClient): DriveUploader = DriveUploader(client)
+}

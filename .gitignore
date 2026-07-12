@@ -1,0 +1,19 @@
+*.iml
+.gradle/
+.kotlin/
+build/
+local.properties
+.idea/
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.keystore
+
+# OAuth / API credentials — never commit
+client_secret*.json
+**/client_secret*.json
+*.credentials.json
+google-services.json
