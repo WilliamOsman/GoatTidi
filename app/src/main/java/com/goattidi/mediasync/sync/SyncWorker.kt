@@ -139,13 +139,26 @@ class SyncWorker @AssistedInject constructor(
                 // File vanished on Drive; fall through and upload it again
             }
         }
+        // Content dedup (§4.4): identical bytes already verified on Drive — moved,
+        // renamed, or duplicated locally — are adopted with one GET, never re-uploaded.
+        if (record.resumeSessionUri == null) {
+            repository.lookupUploaded(md5)?.let { prior ->
+                try {
+                    val outcome = uploader.verifyExisting(prior.driveFileId, md5)
+                    if (outcome is DriveUploader.Outcome.Verified) return outcome
+                    repository.forgetUploaded(md5) // ledger entry no longer trustworthy
+                } catch (e: DriveException.NotFound) {
+                    repository.forgetUploaded(md5) // Drive copy was deleted
+                }
+            }
+        }
         return uploader.upload(
             DriveUploader.UploadRequest(
                 fileName = record.fileName,
                 mimeType = record.mimeType,
                 sizeBytes = md5Stat.sizeBytes,
                 localMd5 = md5,
-                parentFolderId = folderResolver.resolveFolderId(),
+                parentFolderId = folderResolver.resolveFolderId(record),
                 existingSessionUri = record.resumeSessionUri
             ),
             { offset -> localFiles.open(record, offset) },

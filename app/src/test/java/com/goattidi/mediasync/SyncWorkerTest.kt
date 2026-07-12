@@ -72,7 +72,7 @@ class SyncWorkerTest {
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        repo = SyncStateRepository(db.syncRecordDao(), MediaStoreScanner(context.contentResolver))
+        repo = SyncStateRepository(db.syncRecordDao(), db.uploadedContentDao(), MediaStoreScanner(context.contentResolver))
         server = MockWebServer()
         server.start()
         val client = DriveClient(FakeDriveAuth(), OkHttpClient(), server.url("/").toString())
@@ -119,7 +119,7 @@ class SyncWorkerTest {
                 appContext: Context,
                 workerClassName: String,
                 workerParameters: WorkerParameters
-            ): ListenableWorker = SyncWorker(appContext, workerParameters, repo, uploader, files) { null }
+            ): ListenableWorker = SyncWorker(appContext, workerParameters, repo, uploader, files) { _ -> null }
         }
         return TestListenableWorkerBuilder<SyncWorker>(context).setWorkerFactory(factory).build() as SyncWorker
     }
@@ -257,6 +257,49 @@ class SyncWorkerTest {
         // The second run must be verify-only: a single GET, no re-upload
         val methods = buildList { repeat(server.requestCount) { add(server.takeRequest().method!!) } }
         assertEquals(listOf("POST", "PUT", "GET", "GET"), methods)
+    }
+
+    @Test
+    fun `moved file with identical bytes is adopted from ledger without re-upload`() = runTest {
+        // The original record was dropped when the file moved; the new MediaStore row
+        // is NOT_UPLOADED→QUEUED, but the ledger remembers these exact bytes on Drive.
+        db.syncRecordDao().upsert(record(id = 7, md5 = contentMd5))
+        db.uploadedContentDao().upsert(
+            com.goattidi.mediasync.data.db.UploadedContent(contentMd5, "drv-earlier", "old-name.mp4", 11, 123L)
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .setBody("""{"id":"drv-earlier","md5Checksum":"$contentMd5"}""")
+        )
+
+        val result = buildWorker().doWork()
+
+        assertEquals(ListenableWorker.Result.success(), result)
+        val rec = db.syncRecordDao().getById(7L)!!
+        assertEquals(SyncStatus.SYNCED, rec.status)
+        assertEquals("drv-earlier", rec.driveFileId) // re-linked, not re-uploaded
+        assertEquals(1, server.requestCount)
+        assertEquals("GET", server.takeRequest().method) // single files.get, no upload
+    }
+
+    @Test
+    fun `stale ledger entry pointing at deleted Drive file falls back to real upload`() = runTest {
+        db.syncRecordDao().upsert(record(id = 8, md5 = contentMd5))
+        db.uploadedContentDao().upsert(
+            com.goattidi.mediasync.data.db.UploadedContent(contentMd5, "drv-gone", "old.mp4", 11, 123L)
+        )
+        server.enqueue(MockResponse().setResponseCode(404)) // ledger check: file deleted on Drive
+        server.enqueue(sessionStart())
+        server.enqueue(done(id = "drv-new"))
+
+        val result = buildWorker().doWork()
+
+        assertEquals(ListenableWorker.Result.success(), result)
+        val rec = db.syncRecordDao().getById(8L)!!
+        assertEquals(SyncStatus.SYNCED, rec.status)
+        assertEquals("drv-new", rec.driveFileId)
+        // ledger now points at the fresh upload
+        assertEquals("drv-new", db.uploadedContentDao().getByMd5(contentMd5)!!.driveFileId)
     }
 
     @Test

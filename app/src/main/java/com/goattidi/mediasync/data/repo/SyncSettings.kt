@@ -14,6 +14,18 @@ import javax.inject.Singleton
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
+/** How uploads are organized inside the destination folder (§4.4). */
+enum class DriveLayout {
+    /** Everything directly in the destination folder. */
+    FLAT,
+
+    /** One subfolder per upload month, e.g. "2026-07". */
+    BY_MONTH,
+
+    /** One subfolder per local source folder, e.g. "Camera", "WhatsApp Video". */
+    MIRROR_LOCAL
+}
+
 @Singleton
 class SyncSettings @Inject constructor(
     @ApplicationContext private val context: Context
@@ -22,10 +34,18 @@ class SyncSettings @Inject constructor(
     private val keyChargingOnly = booleanPreferencesKey("charging_only")
     private val keyFolderName = stringPreferencesKey("drive_folder_name")
     private val keyFolderId = stringPreferencesKey("drive_folder_id")
+    private val keyLayout = stringPreferencesKey("drive_layout")
 
     val wifiOnly: Flow<Boolean> = context.dataStore.data.map { it[keyWifiOnly] ?: true }
     val chargingOnly: Flow<Boolean> = context.dataStore.data.map { it[keyChargingOnly] ?: false }
     val folderName: Flow<String> = context.dataStore.data.map { it[keyFolderName] ?: DEFAULT_FOLDER_NAME }
+    val layout: Flow<DriveLayout> = context.dataStore.data.map { prefs ->
+        prefs[keyLayout]?.let { runCatching { DriveLayout.valueOf(it) }.getOrNull() } ?: DriveLayout.FLAT
+    }
+
+    suspend fun setLayout(value: DriveLayout) {
+        context.dataStore.edit { it[keyLayout] = value.name }
+    }
 
     suspend fun setWifiOnly(value: Boolean) {
         context.dataStore.edit { it[keyWifiOnly] = value }

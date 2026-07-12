@@ -10,6 +10,7 @@ import com.goattidi.mediasync.data.db.SyncStatus
 import com.goattidi.mediasync.data.drive.DriveAuthConsentRequired
 import com.goattidi.mediasync.data.drive.DriveAuthProvider
 import com.goattidi.mediasync.data.drive.DriveException
+import com.goattidi.mediasync.data.repo.DriveLayout
 import com.goattidi.mediasync.data.repo.SyncSettings
 import com.goattidi.mediasync.data.repo.SyncStateRepository
 import com.goattidi.mediasync.sync.ReclaimEngine
@@ -28,7 +29,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-enum class Screen { GALLERY, RECLAIM }
+enum class Screen { GALLERY, RECLAIM, SETTINGS }
 
 enum class Filter(val label: String) {
     ALL("All"),
@@ -59,21 +60,40 @@ class MainViewModel @Inject constructor(
         val busy: Boolean = false,
         val message: String? = null,
         val consentIntent: PendingIntent? = null,
-        val reclaimCandidates: List<SyncRecord> = emptyList()
+        val reclaimCandidates: List<SyncRecord> = emptyList(),
+        val folderName: String = SyncSettings.DEFAULT_FOLDER_NAME,
+        val layout: DriveLayout = DriveLayout.FLAT,
+        val wifiOnly: Boolean = true,
+        val chargingOnly: Boolean = false
     ) {
         val selectionMode: Boolean get() = selected.isNotEmpty()
     }
 
     private val ui = MutableStateFlow(UiState())
 
-    val state: StateFlow<UiState> = combine(repository.observeAll(), ui) { records, s ->
+    private data class Prefs(
+        val folderName: String,
+        val layout: DriveLayout,
+        val wifiOnly: Boolean,
+        val chargingOnly: Boolean
+    )
+
+    private val prefs = combine(
+        settings.folderName, settings.layout, settings.wifiOnly, settings.chargingOnly
+    ) { name, layout, wifi, charging -> Prefs(name, layout, wifi, charging) }
+
+    val state: StateFlow<UiState> = combine(repository.observeAll(), prefs, ui) { records, p, s ->
         val visible = records
             .filter { matches(it, s.filter) }
             .sortedByDescending { it.dateTaken }
         s.copy(
             records = visible,
             totalCount = records.size,
-            syncedCount = records.count { it.status == SyncStatus.SYNCED }
+            syncedCount = records.count { it.status == SyncStatus.SYNCED },
+            folderName = p.folderName,
+            layout = p.layout,
+            wifiOnly = p.wifiOnly,
+            chargingOnly = p.chargingOnly
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
@@ -169,6 +189,28 @@ class MainViewModel @Inject constructor(
     }
 
     fun openGallery() = ui.update { it.copy(screen = Screen.GALLERY) }
+
+    fun openSettings() = ui.update { it.copy(screen = Screen.SETTINGS) }
+
+    fun saveFolderName(name: String) {
+        viewModelScope.launch {
+            val trimmed = name.trim().ifEmpty { SyncSettings.DEFAULT_FOLDER_NAME }
+            settings.setFolderName(trimmed)
+            ui.update { it.copy(message = "Future uploads go to \"$trimmed\"") }
+        }
+    }
+
+    fun setLayout(layout: DriveLayout) {
+        viewModelScope.launch { settings.setLayout(layout) }
+    }
+
+    fun setWifiOnly(value: Boolean) {
+        viewModelScope.launch { settings.setWifiOnly(value) }
+    }
+
+    fun setChargingOnly(value: Boolean) {
+        viewModelScope.launch { settings.setChargingOnly(value) }
+    }
 
     fun requestDelete(id: Long) {
         viewModelScope.launch {

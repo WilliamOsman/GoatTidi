@@ -3,6 +3,8 @@ package com.goattidi.mediasync.data.repo
 import com.goattidi.mediasync.data.db.SyncRecord
 import com.goattidi.mediasync.data.db.SyncRecordDao
 import com.goattidi.mediasync.data.db.SyncStatus
+import com.goattidi.mediasync.data.db.UploadedContent
+import com.goattidi.mediasync.data.db.UploadedContentDao
 import com.goattidi.mediasync.data.media.MediaStoreScanner
 import com.goattidi.mediasync.data.media.ScannedMedia
 import kotlinx.coroutines.flow.Flow
@@ -12,6 +14,7 @@ import javax.inject.Singleton
 @Singleton
 class SyncStateRepository @Inject constructor(
     private val dao: SyncRecordDao,
+    private val uploadedDao: UploadedContentDao,
     private val scanner: MediaStoreScanner
 ) {
 
@@ -65,13 +68,25 @@ class SyncStateRepository @Inject constructor(
     suspend fun saveSessionUri(id: Long, sessionUri: String) =
         update(id) { it.copy(resumeSessionUri = sessionUri) }
 
-    suspend fun markSynced(id: Long, driveFileId: String, driveMd5: String, uploadedAt: Long) =
+    suspend fun markSynced(id: Long, driveFileId: String, driveMd5: String, uploadedAt: Long) {
         update(id) {
             it.copy(
                 status = SyncStatus.SYNCED, driveFileId = driveFileId, driveMd5 = driveMd5,
                 uploadedAt = uploadedAt, resumeSessionUri = null, failureReason = null
             )
         }
+        dao.getById(id)?.let { r ->
+            uploadedDao.upsert(
+                UploadedContent(driveMd5.lowercase(), driveFileId, r.fileName, r.sizeBytes, uploadedAt)
+            )
+        }
+    }
+
+    // ---- Upload ledger (content dedup, §4.4) ----
+
+    suspend fun lookupUploaded(md5: String): UploadedContent? = uploadedDao.getByMd5(md5.lowercase())
+
+    suspend fun forgetUploaded(md5: String) = uploadedDao.deleteByMd5(md5.lowercase())
 
     suspend fun markFailed(id: Long, reason: String, driveFileId: String? = null) =
         update(id) {
@@ -117,13 +132,23 @@ class SyncStateRepository @Inject constructor(
             )
         }
 
-    suspend fun confirmSynced(id: Long, driveMd5: String) =
+    suspend fun confirmSynced(id: Long, driveMd5: String) {
         update(id) {
             it.copy(
                 status = SyncStatus.SYNCED, driveMd5 = driveMd5,
                 uploadedAt = it.uploadedAt ?: System.currentTimeMillis(), failureReason = null
             )
         }
+        dao.getById(id)?.let { r ->
+            val fileId = r.driveFileId ?: return
+            uploadedDao.upsert(
+                UploadedContent(
+                    driveMd5.lowercase(), fileId, r.fileName, r.sizeBytes,
+                    r.uploadedAt ?: System.currentTimeMillis()
+                )
+            )
+        }
+    }
 
     private suspend fun update(id: Long, transform: (SyncRecord) -> SyncRecord) {
         dao.getById(id)?.let { dao.upsert(transform(it)) }

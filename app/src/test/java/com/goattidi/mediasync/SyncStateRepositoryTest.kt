@@ -34,7 +34,7 @@ class SyncStateRepositoryTest {
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        repo = SyncStateRepository(db.syncRecordDao(), MediaStoreScanner(context.contentResolver))
+        repo = SyncStateRepository(db.syncRecordDao(), db.uploadedContentDao(), MediaStoreScanner(context.contentResolver))
     }
 
     @After

@@ -111,7 +111,7 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
         }
     }
 
-    BackHandler(enabled = state.screen == Screen.RECLAIM) { viewModel.openGallery() }
+    BackHandler(enabled = state.screen != Screen.GALLERY) { viewModel.openGallery() }
 
     Scaffold(
         topBar = {
@@ -120,6 +120,7 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
                     Text(
                         when {
                             state.screen == Screen.RECLAIM -> "Free up space"
+                            state.screen == Screen.SETTINGS -> "Settings"
                             state.selectionMode -> "${state.selected.size} selected"
                             else -> "GoatTidi · ${state.syncedCount}/${state.totalCount} synced"
                         },
@@ -128,7 +129,7 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
                 },
                 actions = {
                     when {
-                        state.screen == Screen.RECLAIM ->
+                        state.screen != Screen.GALLERY ->
                             TextButton(onClick = { viewModel.openGallery() }) { Text("Gallery") }
                         state.selectionMode -> {
                             TextButton(onClick = { viewModel.syncSelected() }) { Text("Upload") }
@@ -138,6 +139,7 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
                             TextButton(onClick = { viewModel.verify() }) { Text("Verify") }
                             TextButton(onClick = { viewModel.openReclaim() }) { Text("Free space") }
                             TextButton(onClick = { viewModel.connectDrive() }) { Text("Drive") }
+                            TextButton(onClick = { viewModel.openSettings() }) { Text("⚙") }
                         }
                     }
                 }
@@ -150,6 +152,7 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
             when {
                 !permissionGranted -> PermissionExplainer { permissionLauncher.launch(requiredPermissions()) }
                 state.screen == Screen.GALLERY -> GalleryContent(state, viewModel)
+                state.screen == Screen.SETTINGS -> SettingsContent(state, viewModel)
                 else -> ReclaimContent(state, viewModel)
             }
         }

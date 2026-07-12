@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.room.Room
 import com.goattidi.mediasync.data.db.AppDatabase
 import com.goattidi.mediasync.data.db.SyncRecordDao
+import com.goattidi.mediasync.data.db.UploadedContentDao
 import com.goattidi.mediasync.data.drive.DriveAuthProvider
 import com.goattidi.mediasync.data.drive.DriveClient
 import com.goattidi.mediasync.data.drive.DriveUploader
@@ -24,10 +25,15 @@ object AppModule {
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
-        Room.databaseBuilder(context, AppDatabase::class.java, "goattidi.db").build()
+        Room.databaseBuilder(context, AppDatabase::class.java, "goattidi.db")
+            .addMigrations(AppDatabase.MIGRATION_1_2)
+            .build()
 
     @Provides
     fun provideSyncRecordDao(db: AppDatabase): SyncRecordDao = db.syncRecordDao()
+
+    @Provides
+    fun provideUploadedContentDao(db: AppDatabase): UploadedContentDao = db.uploadedContentDao()
 
     @Provides
     fun provideContentResolver(@ApplicationContext context: Context): ContentResolver =
