@@ -67,4 +67,28 @@ class VerifyEngine @Inject constructor(
         }
         return Summary(candidates.size, confirmed, orphaned, modified, unverified)
     }
+
+    /**
+     * Rebuilds the upload ledger from Drive itself: pages through every file the
+     * app can see (its own uploads, in whatever folder they live now) and records
+     * their checksums. Restores cross-folder dedup after a reinstall or DB loss.
+     * Returns the number of ledger entries imported.
+     */
+    suspend fun importLedgerFromDrive(retryPolicy: RetryPolicy = RetryPolicy()): Int {
+        var imported = 0
+        var pageToken: String? = null
+        val now = System.currentTimeMillis()
+        do {
+            val page = withRetry(retryPolicy) { client.listFiles(pageToken) }
+            for (file in page.files) {
+                val md5 = file.md5Checksum ?: continue // Docs/Sheets etc. have no checksum
+                repository.recordUploaded(
+                    md5, file.id, file.name ?: "", file.size?.toLongOrNull() ?: 0L, now
+                )
+                imported++
+            }
+            pageToken = page.nextPageToken
+        } while (pageToken != null)
+        return imported
+    }
 }

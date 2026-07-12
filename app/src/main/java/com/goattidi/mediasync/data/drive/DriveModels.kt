@@ -13,7 +13,10 @@ data class DriveFile(
 )
 
 @Serializable
-data class DriveFileList(val files: List<DriveFile> = emptyList())
+data class DriveFileList(
+    val files: List<DriveFile> = emptyList(),
+    val nextPageToken: String? = null
+)
 
 @Serializable
 data class DriveErrorEnvelope(val error: DriveErrorBody? = null)

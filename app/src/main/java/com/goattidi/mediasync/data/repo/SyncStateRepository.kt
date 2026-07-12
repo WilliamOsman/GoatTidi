@@ -88,6 +88,9 @@ class SyncStateRepository @Inject constructor(
 
     suspend fun forgetUploaded(md5: String) = uploadedDao.deleteByMd5(md5.lowercase())
 
+    suspend fun recordUploaded(md5: String, driveFileId: String, fileName: String, sizeBytes: Long, uploadedAt: Long) =
+        uploadedDao.upsert(UploadedContent(md5.lowercase(), driveFileId, fileName, sizeBytes, uploadedAt))
+
     suspend fun markFailed(id: Long, reason: String, driveFileId: String? = null) =
         update(id) {
             it.copy(

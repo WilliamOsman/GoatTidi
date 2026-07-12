@@ -94,6 +94,18 @@ fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
 
         HorizontalDivider()
 
+        Text("Maintenance", style = MaterialTheme.typography.titleMedium)
+        TextButton(onClick = { viewModel.relinkFromDrive() }) { Text("Re-link uploads from Drive") }
+        Text(
+            "Scans every file this app has uploaded to Drive — in any folder — and " +
+                "rebuilds the duplicate-detection index from their checksums. Use after " +
+                "reinstalling the app or if uploads seem to be repeating.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        HorizontalDivider()
+
         Text(
             "Changes apply to future uploads only — files already on Drive stay where they are. " +
                 "Moving or renaming files on your phone never re-uploads them: identical content " +

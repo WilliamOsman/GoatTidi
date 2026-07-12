@@ -165,6 +165,20 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    /** Rebuilds the upload ledger from the app's files on Drive (any folder). */
+    fun relinkFromDrive() {
+        viewModelScope.launch {
+            ui.update { it.copy(busy = true) }
+            val text = try {
+                val n = verifyEngine.importLedgerFromDrive()
+                "Re-linked $n uploaded file(s) from Drive — duplicates of these won't re-upload"
+            } catch (e: Exception) {
+                driveErrorMessage(e)
+            }
+            ui.update { it.copy(busy = false, message = text) }
+        }
+    }
+
     fun connectDrive() {
         viewModelScope.launch {
             val text = try {

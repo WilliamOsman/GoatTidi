@@ -236,6 +236,32 @@ class VerifyAndReclaimTest {
         assertEquals(listOf(2L, 1L), candidates.map { it.mediaStoreId })
     }
 
+    @Test
+    fun `ledger import pages through all app files and stores checksums`() = runTest {
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[
+                    {"id":"f1","name":"a.mp4","md5Checksum":"aaaa","size":"100"},
+                    {"id":"f2","name":"doc-no-checksum"}
+                ],"nextPageToken":"page2"}"""
+            )
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[{"id":"f3","name":"b.jpg","md5Checksum":"BBBB","size":"200"}]}"""
+            )
+        )
+
+        val imported = VerifyEngine(repo, client).importLedgerFromDrive(policy)
+
+        assertEquals(2, imported) // the checksum-less file is skipped
+        assertEquals("f1", db.uploadedContentDao().getByMd5("aaaa")!!.driveFileId)
+        assertEquals("f3", db.uploadedContentDao().getByMd5("bbbb")!!.driveFileId) // case-normalized
+        assertEquals(2, server.requestCount)
+        assertTrue(server.takeRequest().path!!.contains("fields=nextPageToken"))
+        assertTrue(server.takeRequest().path!!.contains("pageToken=page2"))
+    }
+
     // ---- ensureFolder ----
 
     @Test
