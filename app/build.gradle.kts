@@ -68,6 +68,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.datastore.preferences)
     implementation(libs.coil.compose)
+    implementation(libs.coil.video)
     implementation(libs.androidx.hilt.navigation.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
