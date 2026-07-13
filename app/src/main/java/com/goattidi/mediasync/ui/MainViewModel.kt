@@ -9,7 +9,9 @@ import com.goattidi.mediasync.data.db.SyncRecord
 import com.goattidi.mediasync.data.db.SyncStatus
 import com.goattidi.mediasync.data.drive.DriveAuthConsentRequired
 import com.goattidi.mediasync.data.drive.DriveAuthProvider
+import com.goattidi.mediasync.data.drive.DriveClient
 import com.goattidi.mediasync.data.drive.DriveException
+import com.goattidi.mediasync.data.drive.DriveFile
 import com.goattidi.mediasync.data.repo.DriveLayout
 import com.goattidi.mediasync.data.repo.SyncSettings
 import com.goattidi.mediasync.data.repo.SyncStateRepository
@@ -52,8 +54,16 @@ class MainViewModel @Inject constructor(
     private val verifyEngine: VerifyEngine,
     private val reclaimEngine: ReclaimEngine,
     private val authProvider: DriveAuthProvider,
-    private val settings: SyncSettings
+    private val settings: SyncSettings,
+    private val driveClient: DriveClient
 ) : ViewModel() {
+
+    /** One level of the Drive folder browser. Breadcrumb starts at ("root", "My Drive"). */
+    data class FolderPicker(
+        val breadcrumb: List<Pair<String, String>>,
+        val folders: List<DriveFile> = emptyList(),
+        val loading: Boolean = true
+    )
 
     data class UiState(
         val records: List<SyncRecord> = emptyList(),
@@ -70,7 +80,8 @@ class MainViewModel @Inject constructor(
         val layout: DriveLayout = DriveLayout.FLAT,
         val wifiOnly: Boolean = true,
         val chargingOnly: Boolean = false,
-        val dedupFolder: String = ""
+        val dedupFolder: String = "",
+        val folderPicker: FolderPicker? = null
     ) {
         val selectionMode: Boolean get() = selected.isNotEmpty()
     }
@@ -173,14 +184,52 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun saveDedupFolder(path: String) {
+    // ---- Drive folder picker ----
+
+    fun openFolderPicker() = loadPickerLevel(listOf("root" to "My Drive"))
+
+    fun pickerEnter(folder: DriveFile) {
+        val current = ui.value.folderPicker ?: return
+        loadPickerLevel(current.breadcrumb + (folder.id to (folder.name ?: "(unnamed)")))
+    }
+
+    fun pickerUp() {
+        val current = ui.value.folderPicker ?: return
+        if (current.breadcrumb.size > 1) loadPickerLevel(current.breadcrumb.dropLast(1))
+    }
+
+    fun pickerDismiss() = ui.update { it.copy(folderPicker = null) }
+
+    fun pickerSelect() {
+        val picker = ui.value.folderPicker ?: return
+        val (id, _) = picker.breadcrumb.last()
+        val path = picker.breadcrumb.drop(1).joinToString("/") { it.second }.ifEmpty { "My Drive" }
         viewModelScope.launch {
-            settings.setDedupFolder(path)
+            settings.setDedupFolder(path, id)
             ui.update {
                 it.copy(
-                    message = if (path.isBlank()) "Duplicate-check folder cleared"
-                    else "Duplicate-check folder set — run \"Rebuild duplicate index\" to scan it"
+                    folderPicker = null,
+                    message = "Duplicate-check folder: $path — run \"Rebuild duplicate index\" to scan it"
                 )
+            }
+        }
+    }
+
+    fun clearDedupFolder() {
+        viewModelScope.launch {
+            settings.setDedupFolder("", "")
+            ui.update { it.copy(message = "Duplicate-check folder cleared") }
+        }
+    }
+
+    private fun loadPickerLevel(breadcrumb: List<Pair<String, String>>) {
+        viewModelScope.launch {
+            ui.update { it.copy(folderPicker = FolderPicker(breadcrumb)) }
+            try {
+                val folders = driveClient.listFolders(breadcrumb.last().first)
+                ui.update { it.copy(folderPicker = FolderPicker(breadcrumb, folders, loading = false)) }
+            } catch (e: Exception) {
+                ui.update { it.copy(folderPicker = null, message = driveErrorMessage(e)) }
             }
         }
     }
@@ -194,12 +243,17 @@ class MainViewModel @Inject constructor(
             ui.update { it.copy(busy = true) }
             val text = try {
                 val own = verifyEngine.importLedgerFromDrive()
+                val externalId = settings.dedupFolderId.first().trim()
                 val externalPath = settings.dedupFolder.first().trim()
-                val externalMsg = if (externalPath.isEmpty()) "" else {
-                    when (val n = verifyEngine.importExternalFolder(externalPath)) {
-                        null -> " · folder \"$externalPath\" not found on Drive"
-                        else -> " · indexed $n file(s) under \"$externalPath\""
-                    }
+                val imported = when {
+                    externalId.isNotEmpty() -> verifyEngine.importExternalFolderById(externalId)
+                    externalPath.isNotEmpty() -> verifyEngine.importExternalFolder(externalPath)
+                    else -> 0
+                }
+                val externalMsg = when {
+                    externalPath.isEmpty() -> ""
+                    imported == null -> " · folder \"$externalPath\" is gone from Drive — re-select it"
+                    else -> " · indexed $imported file(s) under \"$externalPath\""
                 }
                 "Re-linked $own app upload(s)$externalMsg — duplicates of these won't re-upload"
             } catch (e: Exception) {

@@ -2,13 +2,19 @@ package com.goattidi.mediasync.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -24,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import com.goattidi.mediasync.data.repo.DriveLayout
 
 private fun layoutLabel(layout: DriveLayout): String = when (layout) {
@@ -95,18 +102,17 @@ fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
         HorizontalDivider()
 
         Text("Duplicate detection", style = MaterialTheme.typography.titleMedium)
-        var dedupFolder by remember(state.dedupFolder) { mutableStateOf(state.dedupFolder) }
-        OutlinedTextField(
-            value = dedupFolder,
-            onValueChange = { dedupFolder = it },
-            label = { Text("Drive folder to also check (e.g. Media/Videos)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
+        Text(
+            if (state.dedupFolder.isBlank()) "No Drive folder selected"
+            else "Also checking: ${state.dedupFolder}",
+            style = MaterialTheme.typography.bodyMedium
         )
-        TextButton(
-            onClick = { viewModel.saveDedupFolder(dedupFolder) },
-            enabled = dedupFolder.trim() != state.dedupFolder
-        ) { Text("Save duplicate-check folder") }
+        Row {
+            TextButton(onClick = { viewModel.openFolderPicker() }) { Text("Choose Drive folder…") }
+            if (state.dedupFolder.isNotBlank()) {
+                TextButton(onClick = { viewModel.clearDedupFolder() }) { Text("Clear") }
+            }
+        }
         TextButton(onClick = { viewModel.relinkFromDrive() }) { Text("Rebuild duplicate index") }
         Text(
             "Rebuild scans this app's own uploads (any folder) plus the folder tree above — " +
@@ -127,4 +133,69 @@ fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
+
+    state.folderPicker?.let { picker -> FolderPickerDialog(picker, viewModel) }
+}
+
+@Composable
+private fun FolderPickerDialog(picker: MainViewModel.FolderPicker, viewModel: MainViewModel) {
+    AlertDialog(
+        onDismissRequest = { viewModel.pickerDismiss() },
+        title = {
+            Text(
+                picker.breadcrumb.joinToString(" / ") { it.second },
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        text = {
+            if (picker.loading) {
+                Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            } else {
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 340.dp)) {
+                    if (picker.breadcrumb.size > 1) {
+                        item {
+                            Text(
+                                "⬆  ..",
+                                modifier = Modifier.fillMaxWidth()
+                                    .clickable { viewModel.pickerUp() }
+                                    .padding(vertical = 10.dp, horizontal = 4.dp)
+                            )
+                        }
+                    }
+                    if (picker.folders.isEmpty()) {
+                        item {
+                            Text(
+                                "No subfolders",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp)
+                            )
+                        }
+                    }
+                    items(picker.folders, key = { it.id }) { folder ->
+                        Text(
+                            "📁  ${folder.name ?: "(unnamed)"}",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth()
+                                .clickable { viewModel.pickerEnter(folder) }
+                                .padding(vertical = 10.dp, horizontal = 4.dp)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { viewModel.pickerSelect() }, enabled = !picker.loading) {
+                Text("Select this folder")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { viewModel.pickerDismiss() }) { Text("Cancel") }
+        }
+    )
 }

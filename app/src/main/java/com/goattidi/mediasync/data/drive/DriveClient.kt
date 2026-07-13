@@ -151,6 +151,28 @@ class DriveClient(
         }.use { parseFile(it).id }
     }
 
+    /** Lists all subfolders of a folder, sorted by name ("root" = My Drive). */
+    suspend fun listFolders(parentId: String = "root"): List<DriveFile> {
+        val results = mutableListOf<DriveFile>()
+        var pageToken: String? = null
+        do {
+            val q = java.net.URLEncoder.encode(
+                "'$parentId' in parents and mimeType = '$DRIVE_FOLDER_MIME' and trashed = false", "UTF-8"
+            )
+            var url = "$base/drive/v3/files?q=$q&fields=nextPageToken,files(id,name)" +
+                "&orderBy=name&pageSize=1000&spaces=drive"
+            if (pageToken != null) url += "&pageToken=$pageToken"
+            val page = send { token ->
+                Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
+            }.use { resp ->
+                json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty())
+            }
+            results += page.files
+            pageToken = page.nextPageToken
+        } while (pageToken != null)
+        return results
+    }
+
     /** Lists the direct children of a folder (files and subfolders). */
     suspend fun listChildren(folderId: String, pageToken: String? = null, pageSize: Int = 1000): DriveFileList {
         val q = java.net.URLEncoder.encode("'$folderId' in parents and trashed = false", "UTF-8")

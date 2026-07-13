@@ -102,6 +102,21 @@ class VerifyEngine @Inject constructor(
      */
     suspend fun importExternalFolder(folderPath: String, retryPolicy: RetryPolicy = RetryPolicy()): Int? {
         val rootId = withRetry(retryPolicy) { client.resolveFolderPath(folderPath) } ?: return null
+        return walkAndImport(rootId, retryPolicy)
+    }
+
+    /** Same import, but by folder id (picker selection) — survives folder renames/moves. */
+    suspend fun importExternalFolderById(folderId: String, retryPolicy: RetryPolicy = RetryPolicy()): Int? {
+        val folder = try {
+            withRetry(retryPolicy) { client.getFile(folderId, fields = "id,trashed") }
+        } catch (e: DriveException.NotFound) {
+            return null
+        }
+        if (folder.trashed) return null
+        return walkAndImport(folderId, retryPolicy)
+    }
+
+    private suspend fun walkAndImport(rootId: String, retryPolicy: RetryPolicy): Int {
         var imported = 0
         val now = System.currentTimeMillis()
         val queue = ArrayDeque(listOf(rootId))

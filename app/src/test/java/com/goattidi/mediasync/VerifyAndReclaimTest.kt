@@ -291,6 +291,29 @@ class VerifyAndReclaimTest {
     }
 
     @Test
+    fun `external folder import by id validates the folder then walks it`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"id":"ext-root","trashed":false}"""))
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[{"id":"v1","name":"clip.mp4","md5Checksum":"eeee","size":"500"}]}"""
+            )
+        )
+
+        val imported = VerifyEngine(repo, client).importExternalFolderById("ext-root", policy)
+
+        assertEquals(2, server.requestCount)
+        assertEquals(1, imported)
+        assertEquals("v1", db.uploadedContentDao().getByMd5("eeee")!!.driveFileId)
+    }
+
+    @Test
+    fun `external folder import by id returns null when folder was deleted`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(404))
+
+        assertEquals(null, VerifyEngine(repo, client).importExternalFolderById("gone", policy))
+    }
+
+    @Test
     fun `external folder import returns null when path does not exist`() = runTest {
         server.enqueue(MockResponse().setResponseCode(200).setBody("""{"files":[]}"""))
 

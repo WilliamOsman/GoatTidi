@@ -48,12 +48,19 @@ class SyncSettings @Inject constructor(
     }
 
     private val keyDedupFolder = stringPreferencesKey("dedup_folder_path")
+    private val keyDedupFolderId = stringPreferencesKey("dedup_folder_id")
 
-    /** Drive folder tree (slash-separated path, e.g. "Media/Videos") scanned for duplicates. Empty = off. */
+    /** Display path of the Drive folder tree scanned for duplicates. Empty = off. */
     val dedupFolder: Flow<String> = context.dataStore.data.map { it[keyDedupFolder] ?: "" }
 
-    suspend fun setDedupFolder(path: String) {
-        context.dataStore.edit { it[keyDedupFolder] = path.trim() }
+    /** Drive id of that folder (authoritative — survives renames). Empty = resolve by path. */
+    val dedupFolderId: Flow<String> = context.dataStore.data.map { it[keyDedupFolderId] ?: "" }
+
+    suspend fun setDedupFolder(path: String, id: String = "") {
+        context.dataStore.edit {
+            it[keyDedupFolder] = path.trim()
+            if (id.isBlank()) it.remove(keyDedupFolderId) else it[keyDedupFolderId] = id
+        }
     }
 
     suspend fun setWifiOnly(value: Boolean) {
