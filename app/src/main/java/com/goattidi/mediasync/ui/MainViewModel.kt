@@ -24,9 +24,14 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import javax.inject.Inject
 
 enum class Screen { GALLERY, RECLAIM, SETTINGS }
@@ -274,19 +279,26 @@ class MainViewModel @Inject constructor(
     fun requestDeleteAll() {
         viewModelScope.launch {
             ui.update { it.copy(busy = true) }
-            val safeUris = mutableListOf<Uri>()
-            var blocked = 0
-            for (candidate in reclaimEngine.candidates()) {
-                val gate = try {
-                    reclaimEngine.confirmSafeToDelete(candidate.mediaStoreId)
-                } catch (e: Exception) {
-                    ReclaimEngine.Gate.Blocked(driveErrorMessage(e))
-                }
-                when (gate) {
-                    is ReclaimEngine.Gate.Safe -> safeUris += Uri.parse(candidate.localUri)
-                    is ReclaimEngine.Gate.Blocked -> blocked++
-                }
+            // Bounded parallelism: ~5 concurrent checks saturates OkHttp's per-host
+            // limit without inviting Drive rate limits or thrashing disk hashing
+            val gate = Semaphore(5)
+            val results = coroutineScope {
+                reclaimEngine.candidates().map { candidate ->
+                    async {
+                        gate.withPermit {
+                            candidate to try {
+                                reclaimEngine.confirmSafeToDelete(candidate.mediaStoreId)
+                            } catch (e: Exception) {
+                                ReclaimEngine.Gate.Blocked(driveErrorMessage(e))
+                            }
+                        }
+                    }
+                }.awaitAll()
             }
+            val safeUris = results
+                .filter { (_, g) -> g is ReclaimEngine.Gate.Safe }
+                .map { (candidate, _) -> Uri.parse(candidate.localUri) }
+            val blocked = results.size - safeUris.size
             if (safeUris.isEmpty()) {
                 ui.update {
                     it.copy(

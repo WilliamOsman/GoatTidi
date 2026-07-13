@@ -8,6 +8,8 @@ import com.goattidi.mediasync.data.drive.RetryPolicy
 import com.goattidi.mediasync.data.drive.withRetry
 import com.goattidi.mediasync.data.hash.Md5
 import com.goattidi.mediasync.data.repo.SyncStateRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -34,7 +36,15 @@ class ReclaimEngine @Inject constructor(
     suspend fun candidates(): List<SyncRecord> =
         repository.syncedRecords().sortedByDescending { it.sizeBytes }
 
-    suspend fun confirmSafeToDelete(mediaStoreId: Long, retryPolicy: RetryPolicy = RetryPolicy()): Gate {
+    // IO dispatcher: hashing streams entire files and must never run on Main
+    suspend fun confirmSafeToDelete(
+        mediaStoreId: Long,
+        retryPolicy: RetryPolicy = RetryPolicy()
+    ): Gate = withContext(Dispatchers.IO) {
+        confirmSafeToDeleteBlocking(mediaStoreId, retryPolicy)
+    }
+
+    private suspend fun confirmSafeToDeleteBlocking(mediaStoreId: Long, retryPolicy: RetryPolicy): Gate {
         val record = repository.getById(mediaStoreId)
             ?: return Gate.Blocked("No sync record for this file")
         if (record.status != SyncStatus.SYNCED || record.driveFileId == null) {
