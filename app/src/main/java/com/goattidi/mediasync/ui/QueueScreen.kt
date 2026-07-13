@@ -1,5 +1,6 @@
 package com.goattidi.mediasync.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,10 +53,26 @@ fun QueueContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
         }
         return
     }
-    LazyColumn(Modifier.fillMaxSize()) {
-        items(state.queue, key = { it.mediaStoreId }) { record ->
-            QueueRow(record, viewModel)
-            HorizontalDivider()
+    Column(Modifier.fillMaxSize()) {
+        val waiting = state.queue.any { it.status == SyncStatus.QUEUED }
+        val uploading = state.queue.any { it.status == SyncStatus.UPLOADING }
+        if (waiting && !uploading && state.wifiOnly) {
+            Text(
+                "Wi-Fi only is ON — queued uploads wait for a Wi-Fi connection. " +
+                    "Connect to Wi-Fi, or allow cellular uploads in Settings.",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.tertiaryContainer)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
+        LazyColumn(Modifier.fillMaxSize()) {
+            items(state.queue, key = { it.mediaStoreId }) { record ->
+                QueueRow(record, viewModel)
+                HorizontalDivider()
+            }
         }
     }
 }
