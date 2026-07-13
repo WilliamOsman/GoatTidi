@@ -91,4 +91,40 @@ class VerifyEngine @Inject constructor(
         } while (pageToken != null)
         return imported
     }
+
+    /**
+     * Indexes one user-designated Drive folder tree (subfolders included) into the
+     * dedup ledger — this is how uploads from OTHER tools (rclone, Drive web) become
+     * known duplicates. Requires the read-only scope; by design this is the only
+     * place the app reads anything it didn't create, and it never leaves this tree.
+     *
+     * Returns the number of files indexed, or null if [folderPath] doesn't exist.
+     */
+    suspend fun importExternalFolder(folderPath: String, retryPolicy: RetryPolicy = RetryPolicy()): Int? {
+        val rootId = withRetry(retryPolicy) { client.resolveFolderPath(folderPath) } ?: return null
+        var imported = 0
+        val now = System.currentTimeMillis()
+        val queue = ArrayDeque(listOf(rootId))
+        val seen = mutableSetOf(rootId) // shortcuts/moves must not loop the walk
+        while (queue.isNotEmpty()) {
+            val folderId = queue.removeFirst()
+            var pageToken: String? = null
+            do {
+                val page = withRetry(retryPolicy) { client.listChildren(folderId, pageToken) }
+                for (file in page.files) {
+                    if (file.isFolder) {
+                        if (seen.add(file.id)) queue.addLast(file.id)
+                    } else {
+                        val md5 = file.md5Checksum ?: continue
+                        repository.recordUploaded(
+                            md5, file.id, file.name ?: "", file.size?.toLongOrNull() ?: 0L, now
+                        )
+                        imported++
+                    }
+                }
+                pageToken = page.nextPageToken
+            } while (pageToken != null)
+        }
+        return imported
+    }
 }

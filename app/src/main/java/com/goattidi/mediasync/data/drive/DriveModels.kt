@@ -3,14 +3,19 @@ package com.goattidi.mediasync.data.drive
 import kotlinx.serialization.Serializable
 import java.io.IOException
 
+const val DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
+
 @Serializable
 data class DriveFile(
     val id: String,
     val name: String? = null,
     val md5Checksum: String? = null,
     val size: String? = null,
+    val mimeType: String? = null,
     val trashed: Boolean = false
-)
+) {
+    val isFolder: Boolean get() = mimeType == DRIVE_FOLDER_MIME
+}
 
 @Serializable
 data class DriveFileList(

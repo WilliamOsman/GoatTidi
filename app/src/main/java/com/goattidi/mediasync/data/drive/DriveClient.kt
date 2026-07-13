@@ -106,26 +106,40 @@ class DriveClient(
             }
         }
 
-    /** Finds-or-creates the app's destination folder. Returns its Drive file id. */
-    suspend fun ensureFolder(name: String, parentId: String? = null): String {
+    /** Finds a folder by name (optionally under a parent). Never creates. */
+    suspend fun findFolder(name: String, parentId: String? = null): String? {
         val escaped = name.replace("\\", "\\\\").replace("'", "\\'")
-        var query = "name = '$escaped' and mimeType = '$FOLDER_MIME' and trashed = false"
+        var query = "name = '$escaped' and mimeType = '$DRIVE_FOLDER_MIME' and trashed = false"
         if (parentId != null) query += " and '$parentId' in parents"
         val encoded = java.net.URLEncoder.encode(query, "UTF-8")
-        val existing = send { token ->
+        return send { token ->
             Request.Builder()
                 .url("$base/drive/v3/files?q=$encoded&fields=files(id,name)&spaces=drive")
                 .get()
                 .header("Authorization", "Bearer $token")
                 .build()
         }.use { resp ->
-            json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty()).files.firstOrNull()
+            json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty()).files.firstOrNull()?.id
         }
-        if (existing != null) return existing.id
+    }
 
+    /** Resolves a slash-separated folder path ("Media/Videos") to a folder id. */
+    suspend fun resolveFolderPath(path: String): String? {
+        var parent: String? = null
+        val segments = path.split('/').map { it.trim() }.filter { it.isNotEmpty() }
+        if (segments.isEmpty()) return null
+        for (segment in segments) {
+            parent = findFolder(segment, parent) ?: return null
+        }
+        return parent
+    }
+
+    /** Finds-or-creates the app's destination folder. Returns its Drive file id. */
+    suspend fun ensureFolder(name: String, parentId: String? = null): String {
+        findFolder(name, parentId)?.let { return it }
         val metadata = buildJsonObject {
             put("name", name)
-            put("mimeType", FOLDER_MIME)
+            put("mimeType", DRIVE_FOLDER_MIME)
             if (parentId != null) put("parents", buildJsonArray { add(parentId) })
         }.toString()
         return send { token ->
@@ -137,13 +151,26 @@ class DriveClient(
         }.use { parseFile(it).id }
     }
 
+    /** Lists the direct children of a folder (files and subfolders). */
+    suspend fun listChildren(folderId: String, pageToken: String? = null, pageSize: Int = 1000): DriveFileList {
+        val q = java.net.URLEncoder.encode("'$folderId' in parents and trashed = false", "UTF-8")
+        var url = "$base/drive/v3/files?q=$q" +
+            "&fields=nextPageToken,files(id,name,md5Checksum,size,mimeType)&pageSize=$pageSize&spaces=drive"
+        if (pageToken != null) url += "&pageToken=$pageToken"
+        return send { token ->
+            Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
+        }.use { resp ->
+            json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty())
+        }
+    }
+
     /**
      * Pages through every non-folder file visible to the app. Under the drive.file
      * scope that is exactly the set of files this app created — wherever the user
      * has since moved them within Drive.
      */
     suspend fun listFiles(pageToken: String? = null, pageSize: Int = 1000): DriveFileList {
-        val q = java.net.URLEncoder.encode("trashed = false and mimeType != '$FOLDER_MIME'", "UTF-8")
+        val q = java.net.URLEncoder.encode("trashed = false and mimeType != '$DRIVE_FOLDER_MIME'", "UTF-8")
         var url = "$base/drive/v3/files?q=$q" +
             "&fields=nextPageToken,files(id,name,md5Checksum,size)&pageSize=$pageSize&spaces=drive"
         if (pageToken != null) url += "&pageToken=$pageToken"
@@ -223,6 +250,5 @@ class DriveClient(
     private companion object {
         val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
         val RATE_LIMIT_REASONS = setOf("userRateLimitExceeded", "rateLimitExceeded", "dailyLimitExceeded")
-        const val FOLDER_MIME = "application/vnd.google-apps.folder"
     }
 }

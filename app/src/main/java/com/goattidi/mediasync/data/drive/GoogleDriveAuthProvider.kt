@@ -23,7 +23,7 @@ class GoogleDriveAuthProvider @Inject constructor(
 
     override suspend fun accessToken(forceRefresh: Boolean): String {
         val request = AuthorizationRequest.builder()
-            .setRequestedScopes(listOf(Scope(DRIVE_FILE_SCOPE)))
+            .setRequestedScopes(listOf(Scope(DRIVE_FILE_SCOPE), Scope(DRIVE_READONLY_SCOPE)))
             .build()
         val result = try {
             Identity.getAuthorizationClient(context).authorize(request).await()

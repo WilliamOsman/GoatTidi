@@ -94,12 +94,25 @@ fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
 
         HorizontalDivider()
 
-        Text("Maintenance", style = MaterialTheme.typography.titleMedium)
-        TextButton(onClick = { viewModel.relinkFromDrive() }) { Text("Re-link uploads from Drive") }
+        Text("Duplicate detection", style = MaterialTheme.typography.titleMedium)
+        var dedupFolder by remember(state.dedupFolder) { mutableStateOf(state.dedupFolder) }
+        OutlinedTextField(
+            value = dedupFolder,
+            onValueChange = { dedupFolder = it },
+            label = { Text("Drive folder to also check (e.g. Media/Videos)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        TextButton(
+            onClick = { viewModel.saveDedupFolder(dedupFolder) },
+            enabled = dedupFolder.trim() != state.dedupFolder
+        ) { Text("Save duplicate-check folder") }
+        TextButton(onClick = { viewModel.relinkFromDrive() }) { Text("Rebuild duplicate index") }
         Text(
-            "Scans every file this app has uploaded to Drive — in any folder — and " +
-                "rebuilds the duplicate-detection index from their checksums. Use after " +
-                "reinstalling the app or if uploads seem to be repeating.",
+            "Rebuild scans this app's own uploads (any folder) plus the folder tree above — " +
+                "including files uploaded by other tools — and indexes their checksums. " +
+                "Anything whose exact bytes are already on Drive is marked synced instead of " +
+                "re-uploaded. The app reads only the tree you name here, nothing else.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

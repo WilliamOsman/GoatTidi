@@ -64,7 +64,8 @@ class MainViewModel @Inject constructor(
         val folderName: String = SyncSettings.DEFAULT_FOLDER_NAME,
         val layout: DriveLayout = DriveLayout.FLAT,
         val wifiOnly: Boolean = true,
-        val chargingOnly: Boolean = false
+        val chargingOnly: Boolean = false,
+        val dedupFolder: String = ""
     ) {
         val selectionMode: Boolean get() = selected.isNotEmpty()
     }
@@ -75,12 +76,13 @@ class MainViewModel @Inject constructor(
         val folderName: String,
         val layout: DriveLayout,
         val wifiOnly: Boolean,
-        val chargingOnly: Boolean
+        val chargingOnly: Boolean,
+        val dedupFolder: String
     )
 
     private val prefs = combine(
-        settings.folderName, settings.layout, settings.wifiOnly, settings.chargingOnly
-    ) { name, layout, wifi, charging -> Prefs(name, layout, wifi, charging) }
+        settings.folderName, settings.layout, settings.wifiOnly, settings.chargingOnly, settings.dedupFolder
+    ) { name, layout, wifi, charging, dedup -> Prefs(name, layout, wifi, charging, dedup) }
 
     val state: StateFlow<UiState> = combine(repository.observeAll(), prefs, ui) { records, p, s ->
         val visible = records
@@ -93,7 +95,8 @@ class MainViewModel @Inject constructor(
             folderName = p.folderName,
             layout = p.layout,
             wifiOnly = p.wifiOnly,
-            chargingOnly = p.chargingOnly
+            chargingOnly = p.chargingOnly,
+            dedupFolder = p.dedupFolder
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
@@ -165,13 +168,35 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    /** Rebuilds the upload ledger from the app's files on Drive (any folder). */
+    fun saveDedupFolder(path: String) {
+        viewModelScope.launch {
+            settings.setDedupFolder(path)
+            ui.update {
+                it.copy(
+                    message = if (path.isBlank()) "Duplicate-check folder cleared"
+                    else "Duplicate-check folder set — run \"Rebuild duplicate index\" to scan it"
+                )
+            }
+        }
+    }
+
+    /**
+     * Rebuilds the dedup index: the app's own uploads (any folder) plus, if
+     * configured, the user-designated external folder tree (rclone uploads etc.).
+     */
     fun relinkFromDrive() {
         viewModelScope.launch {
             ui.update { it.copy(busy = true) }
             val text = try {
-                val n = verifyEngine.importLedgerFromDrive()
-                "Re-linked $n uploaded file(s) from Drive — duplicates of these won't re-upload"
+                val own = verifyEngine.importLedgerFromDrive()
+                val externalPath = settings.dedupFolder.first().trim()
+                val externalMsg = if (externalPath.isEmpty()) "" else {
+                    when (val n = verifyEngine.importExternalFolder(externalPath)) {
+                        null -> " · folder \"$externalPath\" not found on Drive"
+                        else -> " · indexed $n file(s) under \"$externalPath\""
+                    }
+                }
+                "Re-linked $own app upload(s)$externalMsg — duplicates of these won't re-upload"
             } catch (e: Exception) {
                 driveErrorMessage(e)
             }

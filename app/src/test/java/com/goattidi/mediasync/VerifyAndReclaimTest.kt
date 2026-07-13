@@ -262,6 +262,44 @@ class VerifyAndReclaimTest {
         assertTrue(server.takeRequest().path!!.contains("pageToken=page2"))
     }
 
+    @Test
+    fun `external folder import walks subfolders and indexes checksums`() = runTest {
+        // resolve path "Media" → root folder id
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"files":[{"id":"ext-root"}]}"""))
+        // children of ext-root: one video + one subfolder
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[
+                    {"id":"v1","name":"clip.mp4","md5Checksum":"cccc","size":"500"},
+                    {"id":"sub1","name":"2024","mimeType":"application/vnd.google-apps.folder"}
+                ]}"""
+            )
+        )
+        // children of sub1: one more video
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[{"id":"v2","name":"old.mp4","md5Checksum":"dddd","size":"900"}]}"""
+            )
+        )
+
+        val imported = VerifyEngine(repo, client).importExternalFolder("Media", policy)
+
+        assertEquals(2, imported)
+        assertEquals("v1", db.uploadedContentDao().getByMd5("cccc")!!.driveFileId)
+        assertEquals("v2", db.uploadedContentDao().getByMd5("dddd")!!.driveFileId)
+        assertEquals(3, server.requestCount)
+    }
+
+    @Test
+    fun `external folder import returns null when path does not exist`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"files":[]}"""))
+
+        val imported = VerifyEngine(repo, client).importExternalFolder("No/Such/Folder", policy)
+
+        assertEquals(null, imported)
+        assertEquals(1, server.requestCount) // stops at the first missing segment
+    }
+
     // ---- ensureFolder ----
 
     @Test
