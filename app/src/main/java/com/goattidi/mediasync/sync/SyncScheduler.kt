@@ -26,8 +26,12 @@ class SyncScheduler @Inject constructor(
             .setConstraints(constraints)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
+        // REPLACE, not APPEND: the worker derives all work from the DB, so replacing
+        // loses nothing — and it re-applies current constraints (e.g. after the user
+        // turns Wi-Fi-only off, the old UNMETERED-constrained request must not
+        // keep blocking the queue).
         WorkManager.getInstance(context)
-            .enqueueUniqueWork(UNIQUE_WORK_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+            .enqueueUniqueWork(UNIQUE_WORK_NAME, ExistingWorkPolicy.REPLACE, request)
     }
 
     fun cancelAll() {

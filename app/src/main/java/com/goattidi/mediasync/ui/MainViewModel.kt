@@ -323,11 +323,27 @@ class MainViewModel @Inject constructor(
     }
 
     fun setWifiOnly(value: Boolean) {
-        viewModelScope.launch { settings.setWifiOnly(value) }
+        viewModelScope.launch {
+            settings.setWifiOnly(value)
+            rescheduleIfQueueActive()
+        }
     }
 
     fun setChargingOnly(value: Boolean) {
-        viewModelScope.launch { settings.setChargingOnly(value) }
+        viewModelScope.launch {
+            settings.setChargingOnly(value)
+            rescheduleIfQueueActive()
+        }
+    }
+
+    /** Constraint changes must re-enqueue pending work or the old constraints keep applying. */
+    private suspend fun rescheduleIfQueueActive() {
+        val hasPending = state.value.queue.any {
+            it.status == SyncStatus.QUEUED || it.status == SyncStatus.UPLOADING
+        }
+        if (hasPending) {
+            scheduler.scheduleNow(settings.wifiOnly.first(), settings.chargingOnly.first())
+        }
     }
 
     fun requestDelete(id: Long) {
