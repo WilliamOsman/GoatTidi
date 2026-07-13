@@ -163,8 +163,8 @@ private fun MediaTile(
         modifier = Modifier
             .aspectRatio(1f)
             .then(
-                if (selected) Modifier.border(4.dp, MaterialTheme.colorScheme.primary)
-                else Modifier.border(2.dp, statusBorder)
+                if (selected) Modifier.border(6.dp, MaterialTheme.colorScheme.primary)
+                else Modifier.border(4.dp, statusBorder)
             )
             .combinedClickable(
                 onClick = {
