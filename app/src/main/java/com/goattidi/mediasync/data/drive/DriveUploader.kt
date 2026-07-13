@@ -53,7 +53,9 @@ class DriveUploader(
         request: UploadRequest,
         source: Source,
         onSessionEstablished: suspend (String) -> Unit = {},
-        onProgress: suspend (confirmedBytes: Long) -> Unit = {}
+        onProgress: suspend (confirmedBytes: Long) -> Unit = {},
+        /** Fires from the network thread as bytes hit the socket (display only). */
+        onBytesSent: ((Long) -> Unit)? = null
     ): Outcome {
         require(request.sizeBytes > 0) { "Cannot upload empty file ${request.fileName}" }
         var sessionUri = request.existingSessionUri
@@ -84,7 +86,7 @@ class DriveUploader(
                 onSessionEstablished(it)
             }
             completed = try {
-                pushBytes(uri, request, source, offset, onProgress)
+                pushBytes(uri, request, source, offset, onProgress, onBytesSent)
             } catch (e: DriveException.SessionExpired) {
                 if (restartsLeft-- <= 0) throw e
                 sessionUri = null
@@ -103,7 +105,8 @@ class DriveUploader(
         request: UploadRequest,
         source: Source,
         startOffset: Long,
-        onProgress: suspend (Long) -> Unit
+        onProgress: suspend (Long) -> Unit,
+        onBytesSent: ((Long) -> Unit)? = null
     ): DriveFile {
         var offset = startOffset
         var stream: InputStream? = null
@@ -115,7 +118,7 @@ class DriveUploader(
                 val data = ByteArray(chunkLen).also { readFully(input, it) }
 
                 val result = try {
-                    putChunk(sessionUri, data, offset, request.sizeBytes)
+                    putChunk(sessionUri, data, offset, request.sizeBytes, onBytesSent)
                 } catch (e: DriveException.Network) {
                     networkFailures++
                     if (networkFailures >= retryPolicy.maxAttempts) throw e
@@ -150,11 +153,17 @@ class DriveUploader(
         }
     }
 
-    private suspend fun putChunk(sessionUri: String, data: ByteArray, offset: Long, total: Long): ChunkResult {
+    private suspend fun putChunk(
+        sessionUri: String,
+        data: ByteArray,
+        offset: Long,
+        total: Long,
+        onBytesSent: ((Long) -> Unit)? = null
+    ): ChunkResult {
         var attempt = 0
         while (true) {
             try {
-                return client.uploadChunk(sessionUri, data, offset, total)
+                return client.uploadChunk(sessionUri, data, offset, total, onBytesSent)
             } catch (e: DriveException.RateLimited) {
                 attempt++
                 if (attempt >= retryPolicy.maxAttempts) throw e

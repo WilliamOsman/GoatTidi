@@ -190,6 +190,24 @@ class DriveUploaderTest {
     }
 
     @Test
+    fun `onBytesSent reports monotonically up to the full file size`() = runTest {
+        // 512 KiB chunks with 256 KiB report steps → multiple reports per chunk
+        val chunkSize = 2 * chunk
+        val content = bytes(chunkSize + 175_000)
+        server.enqueue(sessionStartResponse())
+        server.enqueue(MockResponse().setResponseCode(308).setHeader("Range", "bytes=0-${chunkSize - 1}"))
+        server.enqueue(doneResponse(Md5.of(ByteArrayInputStream(content))))
+        val reports = mutableListOf<Long>()
+
+        DriveUploader(client, policy, chunkSizeBytes = chunkSize)
+            .upload(request(content), source(content), onBytesSent = { reports += it })
+
+        assertTrue(reports.size > 2) // finer than once-per-chunk
+        assertEquals(content.size.toLong(), reports.max())
+        assertEquals(reports.sorted(), reports) // monotonic
+    }
+
+    @Test
     fun `md5 mismatch is never Verified`() = runTest {
         val content = bytes(1000)
         server.enqueue(sessionStartResponse())

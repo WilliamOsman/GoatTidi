@@ -7,12 +7,46 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okio.BufferedSink
 import java.io.IOException
+
+/**
+ * Streams a chunk while reporting absolute file position as bytes hit the socket —
+ * this is what makes upload progress move continuously instead of per-chunk.
+ */
+private class ProgressRequestBody(
+    private val data: ByteArray,
+    private val baseOffset: Long,
+    private val onBytesSent: ((Long) -> Unit)?
+) : RequestBody() {
+    override fun contentType(): MediaType? = null
+    override fun contentLength(): Long = data.size.toLong()
+
+    override fun writeTo(sink: BufferedSink) {
+        if (onBytesSent == null) {
+            sink.write(data)
+            return
+        }
+        var written = 0
+        while (written < data.size) {
+            val n = minOf(REPORT_STEP, data.size - written)
+            sink.write(data, written, n)
+            written += n
+            onBytesSent.invoke(baseOffset + written)
+        }
+    }
+
+    private companion object {
+        const val REPORT_STEP = 256 * 1024
+    }
+}
 
 sealed class SessionStatus {
     /** Server has [confirmedBytes] bytes; continue uploading from that offset. */
@@ -90,11 +124,17 @@ class DriveClient(
             }
         }
 
-    suspend fun uploadChunk(sessionUri: String, data: ByteArray, offset: Long, totalBytes: Long): ChunkResult =
+    suspend fun uploadChunk(
+        sessionUri: String,
+        data: ByteArray,
+        offset: Long,
+        totalBytes: Long,
+        onBytesSent: ((Long) -> Unit)? = null
+    ): ChunkResult =
         send(sessionRequest = true) { token ->
             Request.Builder()
                 .url(sessionUri)
-                .put(data.toRequestBody(null))
+                .put(ProgressRequestBody(data, offset, onBytesSent))
                 .header("Authorization", "Bearer $token")
                 .header("Content-Range", "bytes $offset-${offset + data.size - 1}/$totalBytes")
                 .build()

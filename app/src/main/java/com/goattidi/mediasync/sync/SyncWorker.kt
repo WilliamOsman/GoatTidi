@@ -20,7 +20,12 @@ import com.goattidi.mediasync.data.hash.Md5
 import com.goattidi.mediasync.data.repo.SyncStateRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Drains the upload queue. Stateless by design: every run derives its work from
@@ -65,13 +70,15 @@ class SyncWorker @AssistedInject constructor(
             repository.markFailed(record.mediaStoreId, "Local file no longer exists")
             return ItemResult.DONE
         }
+        // Mark active before hashing: computing a large file's MD5 takes real time
+        // and should show as in-progress, not "waiting"
+        repository.markUploading(record.mediaStoreId)
         val prepared = ensureFreshMd5(record, stat)
         if (prepared == null) {
             repository.markFailed(record.mediaStoreId, "File kept changing while computing checksum")
             return ItemResult.DONE
         }
         val (md5, md5Stat) = prepared
-        repository.markUploading(record.mediaStoreId)
 
         val outcome = try {
             runUpload(record, md5, md5Stat)
@@ -157,33 +164,51 @@ class SyncWorker @AssistedInject constructor(
                 }
             }
         }
-        // Smoothed transfer rate across chunk confirmations (EMA, 30% new sample)
-        var lastBytes = -1L
-        var lastTimeMs = 0L
-        var rateBps = 0L
-        return uploader.upload(
-            DriveUploader.UploadRequest(
-                fileName = record.fileName,
-                mimeType = record.mimeType,
-                sizeBytes = md5Stat.sizeBytes,
-                localMd5 = md5,
-                parentFolderId = folderResolver.resolveFolderId(record),
-                existingSessionUri = record.resumeSessionUri
-            ),
-            { offset -> localFiles.open(record, offset) },
-            onSessionEstablished = { repository.saveSessionUri(record.mediaStoreId, it) },
-            onProgress = { confirmed ->
-                val now = System.currentTimeMillis()
-                if (lastBytes in 0..confirmed && now > lastTimeMs) {
-                    val instant = (confirmed - lastBytes) * 1000 / (now - lastTimeMs)
-                    rateBps = if (rateBps == 0L) instant else (rateBps * 7 + instant * 3) / 10
+        // Socket-level byte counter, persisted by a 500ms poller: progress moves
+        // continuously instead of jumping at 8 MB chunk confirmations.
+        val sentBytes = AtomicLong(-1)
+        return coroutineScope {
+            val poller = launch {
+                var lastBytes = -1L
+                var lastTimeMs = 0L
+                var rateBps = 0L
+                while (isActive) {
+                    delay(500)
+                    val sent = sentBytes.get()
+                    if (sent < 0) continue
+                    val now = System.currentTimeMillis()
+                    if (lastBytes in 0..sent && now > lastTimeMs) {
+                        val instant = (sent - lastBytes) * 1000 / (now - lastTimeMs)
+                        rateBps = if (rateBps == 0L) instant else (rateBps * 7 + instant * 3) / 10
+                    }
+                    lastBytes = sent
+                    lastTimeMs = now
+                    repository.updateProgress(record.mediaStoreId, sent, rateBps)
                 }
-                lastBytes = confirmed
-                lastTimeMs = now
-                repository.updateProgress(record.mediaStoreId, confirmed, rateBps)
-                setProgress(workDataOf(KEY_MEDIA_ID to record.mediaStoreId, KEY_BYTES to confirmed))
             }
-        )
+            try {
+                uploader.upload(
+                    DriveUploader.UploadRequest(
+                        fileName = record.fileName,
+                        mimeType = record.mimeType,
+                        sizeBytes = md5Stat.sizeBytes,
+                        localMd5 = md5,
+                        parentFolderId = folderResolver.resolveFolderId(record),
+                        existingSessionUri = record.resumeSessionUri
+                    ),
+                    { offset -> localFiles.open(record, offset) },
+                    onSessionEstablished = { repository.saveSessionUri(record.mediaStoreId, it) },
+                    onProgress = { confirmed ->
+                        // Server-confirmed offset is authoritative (resets after reconnect)
+                        sentBytes.set(confirmed)
+                        setProgress(workDataOf(KEY_MEDIA_ID to record.mediaStoreId, KEY_BYTES to confirmed))
+                    },
+                    onBytesSent = { sent -> sentBytes.set(sent) }
+                )
+            } finally {
+                poller.cancel()
+            }
+        }
     }
 
     /**
