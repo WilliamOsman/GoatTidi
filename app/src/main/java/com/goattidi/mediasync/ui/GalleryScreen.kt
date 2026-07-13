@@ -1,5 +1,10 @@
 package com.goattidi.mediasync.ui
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -42,6 +48,17 @@ fun statusBadge(status: SyncStatus): String = when (status) {
     SyncStatus.MODIFIED_SINCE_UPLOAD -> "⚠"
     SyncStatus.FAILED -> "✗"
     SyncStatus.ORPHANED -> "👻"
+}
+
+/** Border color per status: grey unsynced, blue syncing, green synced, amber/red trouble. */
+private fun statusColor(status: SyncStatus): Color = when (status) {
+    SyncStatus.NOT_UPLOADED -> Color(0xFF9E9E9E)          // grey
+    SyncStatus.QUEUED -> Color(0xFF2196F3)                // blue (static while waiting)
+    SyncStatus.UPLOADING -> Color(0xFF2196F3)             // blue (breathing, see MediaTile)
+    SyncStatus.SYNCED -> Color(0xFF4CAF50)                // green
+    SyncStatus.MODIFIED_SINCE_UPLOAD -> Color(0xFFFFC107) // amber: needs re-upload
+    SyncStatus.ORPHANED -> Color(0xFFFFC107)              // amber: gone from Drive
+    SyncStatus.FAILED -> Color(0xFFF44336)                // red
 }
 
 @Composable
@@ -99,12 +116,26 @@ private fun MediaTile(
     onToggleSelect: () -> Unit,
     onRetry: () -> Unit
 ) {
+    // "Breathing" border while actively uploading
+    val statusBorder = if (record.status == SyncStatus.UPLOADING) {
+        val breath = rememberInfiniteTransition(label = "uploading-breath")
+        val alpha by breath.animateFloat(
+            initialValue = 0.25f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(durationMillis = 850), RepeatMode.Reverse),
+            label = "uploading-alpha"
+        )
+        statusColor(record.status).copy(alpha = alpha)
+    } else {
+        statusColor(record.status)
+    }
+
     Box(
         modifier = Modifier
             .aspectRatio(1f)
             .then(
-                if (selected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary)
-                else Modifier
+                if (selected) Modifier.border(4.dp, MaterialTheme.colorScheme.primary)
+                else Modifier.border(2.dp, statusBorder)
             )
             .combinedClickable(
                 onClick = {

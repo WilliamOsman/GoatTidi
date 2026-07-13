@@ -40,6 +40,21 @@ fun ReclaimContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
             }
             return@Column
         }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "${state.reclaimCandidates.size} files · " +
+                    formatSize(state.reclaimCandidates.sumOf { it.sizeBytes }),
+                style = MaterialTheme.typography.titleSmall
+            )
+            TextButton(onClick = { viewModel.requestDeleteAll() }, enabled = !state.busy) {
+                Text("Delete all (one confirmation)")
+            }
+        }
+        HorizontalDivider()
         LazyColumn(Modifier.fillMaxSize()) {
             items(state.reclaimCandidates, key = { it.mediaStoreId }) { record ->
                 Row(

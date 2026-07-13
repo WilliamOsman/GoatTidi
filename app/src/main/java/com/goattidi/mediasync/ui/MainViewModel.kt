@@ -267,6 +267,44 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Gates every reclaim candidate (invariant #3 per file), then issues ONE batch
+     * delete request — a single system confirmation dialog instead of one per file.
+     */
+    fun requestDeleteAll() {
+        viewModelScope.launch {
+            ui.update { it.copy(busy = true) }
+            val safeUris = mutableListOf<Uri>()
+            var blocked = 0
+            for (candidate in reclaimEngine.candidates()) {
+                val gate = try {
+                    reclaimEngine.confirmSafeToDelete(candidate.mediaStoreId)
+                } catch (e: Exception) {
+                    ReclaimEngine.Gate.Blocked(driveErrorMessage(e))
+                }
+                when (gate) {
+                    is ReclaimEngine.Gate.Safe -> safeUris += Uri.parse(candidate.localUri)
+                    is ReclaimEngine.Gate.Blocked -> blocked++
+                }
+            }
+            if (safeUris.isEmpty()) {
+                ui.update {
+                    it.copy(
+                        busy = false,
+                        message = if (blocked > 0) "Nothing deleted — $blocked file(s) failed the safety re-check"
+                        else "Nothing to delete"
+                    )
+                }
+            } else {
+                if (blocked > 0) {
+                    ui.update { it.copy(message = "$blocked file(s) skipped by the safety re-check") }
+                }
+                _deleteRequests.emit(safeUris)
+                ui.update { it.copy(busy = false) }
+            }
+        }
+    }
+
     fun onDeleteCompleted() {
         viewModelScope.launch {
             runCatching { repository.scanAndReconcile() }
