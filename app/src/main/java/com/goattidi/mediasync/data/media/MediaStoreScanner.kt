@@ -18,7 +18,9 @@ data class ScannedMedia(
     val mediaType: MediaType,
     val dateTaken: Long,
     /** MediaStore DATE_MODIFIED, in seconds since epoch. */
-    val dateModified: Long
+    val dateModified: Long,
+    /** Playback length in ms; 0 for images or when unknown. */
+    val durationMs: Long = 0
 )
 
 /**
@@ -30,11 +32,25 @@ class MediaStoreScanner @Inject constructor(
 ) {
 
     fun scanAll(): List<ScannedMedia> =
-        scan(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, MediaType.IMAGE, hasDateTaken = true) +
-        scan(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, MediaType.VIDEO, hasDateTaken = true) +
-        scan(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, MediaType.AUDIO, hasDateTaken = false)
+        scan(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, MediaType.IMAGE,
+            hasDateTaken = true, durationColumn = null
+        ) +
+        scan(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI, MediaType.VIDEO,
+            hasDateTaken = true, durationColumn = MediaStore.Video.VideoColumns.DURATION
+        ) +
+        scan(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, MediaType.AUDIO,
+            hasDateTaken = false, durationColumn = MediaStore.Audio.AudioColumns.DURATION
+        )
 
-    private fun scan(collection: Uri, mediaType: MediaType, hasDateTaken: Boolean): List<ScannedMedia> {
+    private fun scan(
+        collection: Uri,
+        mediaType: MediaType,
+        hasDateTaken: Boolean,
+        durationColumn: String?
+    ): List<ScannedMedia> {
         val projection = buildList {
             add(MediaStore.MediaColumns._ID)
             add(MediaStore.MediaColumns.DATA)
@@ -43,6 +59,7 @@ class MediaStoreScanner @Inject constructor(
             add(MediaStore.MediaColumns.MIME_TYPE)
             add(MediaStore.MediaColumns.DATE_MODIFIED)
             if (hasDateTaken) add(MediaStore.MediaColumns.DATE_TAKEN)
+            if (durationColumn != null) add(durationColumn)
         }.toTypedArray()
 
         val results = mutableListOf<ScannedMedia>()
@@ -54,6 +71,7 @@ class MediaStoreScanner @Inject constructor(
             val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
             val modifiedCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
             val takenCol = if (hasDateTaken) cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_TAKEN) else -1
+            val durationCol = if (durationColumn != null) cursor.getColumnIndexOrThrow(durationColumn) else -1
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
@@ -68,7 +86,8 @@ class MediaStoreScanner @Inject constructor(
                     mimeType = cursor.getString(mimeCol) ?: "",
                     mediaType = mediaType,
                     dateTaken = if (dateTaken > 0) dateTaken else dateModified * 1000,
-                    dateModified = dateModified
+                    dateModified = dateModified,
+                    durationMs = if (durationCol >= 0) cursor.getLong(durationCol) else 0L
                 )
             }
         }

@@ -23,7 +23,7 @@ class Converters {
 
 @Database(
     entities = [SyncRecord::class, UploadedContent::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -44,6 +44,13 @@ abstract class AppDatabase : RoomDatabase() {
                         "`uploadedAt` INTEGER NOT NULL, " +
                         "PRIMARY KEY(`md5`))"
                 )
+            }
+        }
+
+        /** v3: media duration for the gallery's video overlay. */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sync_records ADD COLUMN durationMs INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

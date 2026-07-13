@@ -29,6 +29,8 @@ data class SyncRecord(
     val mediaType: MediaType,
     val dateTaken: Long,
     val dateModified: Long,
+    /** Playback length in ms for video/audio; 0 = unknown or not applicable. */
+    val durationMs: Long = 0,
     val localMd5: String?,
     val md5SizeBytes: Long?,
     val md5DateModified: Long?,

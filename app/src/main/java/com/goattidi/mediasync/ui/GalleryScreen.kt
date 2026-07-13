@@ -18,6 +18,11 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -33,7 +38,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.goattidi.mediasync.data.db.MediaType
 import com.goattidi.mediasync.data.db.SyncRecord
@@ -61,8 +68,28 @@ private fun statusColor(status: SyncStatus): Color = when (status) {
     SyncStatus.FAILED -> Color(0xFFF44336)                // red
 }
 
+/** "1:23" / "1:02:45" like the system gallery. */
+private fun formatDuration(ms: Long): String {
+    val totalSec = ms / 1000
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
+    val s = totalSec % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+}
+
 @Composable
 fun GalleryContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
+    val context = LocalContext.current
+
+    fun openInViewer(record: SyncRecord) {
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(Uri.parse(record.localUri), record.mimeType.ifEmpty { "*/*" })
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { context.startActivity(intent) }
+            .onFailure { Toast.makeText(context, "No app can open this file", Toast.LENGTH_SHORT).show() }
+    }
+
     Column(Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
@@ -100,7 +127,8 @@ fun GalleryContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
                     selected = record.mediaStoreId in state.selected,
                     selectionMode = state.selectionMode,
                     onToggleSelect = { viewModel.toggleSelect(record.mediaStoreId) },
-                    onRetry = { viewModel.retryFailed(record.mediaStoreId) }
+                    onRetry = { viewModel.retryFailed(record.mediaStoreId) },
+                    onOpen = { openInViewer(record) }
                 )
             }
         }
@@ -114,7 +142,8 @@ private fun MediaTile(
     selected: Boolean,
     selectionMode: Boolean,
     onToggleSelect: () -> Unit,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    onOpen: () -> Unit
 ) {
     // "Breathing" border while actively uploading
     val statusBorder = if (record.status == SyncStatus.UPLOADING) {
@@ -142,6 +171,7 @@ private fun MediaTile(
                     when {
                         selectionMode -> onToggleSelect()
                         record.status == SyncStatus.FAILED -> onRetry()
+                        else -> onOpen()
                     }
                 },
                 onLongClick = onToggleSelect
@@ -181,12 +211,32 @@ private fun MediaTile(
                 .background(Color.Black.copy(alpha = 0.55f), MaterialTheme.shapes.small)
                 .padding(horizontal = 5.dp, vertical = 1.dp)
         )
+        if (record.mediaType == MediaType.VIDEO) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(4.dp)
+                    .background(Color.Black.copy(alpha = 0.55f), MaterialTheme.shapes.small)
+                    .padding(horizontal = 5.dp, vertical = 1.dp)
+            ) {
+                Text("▶", color = Color.White, fontSize = 8.sp)
+                if (record.durationMs > 0) {
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        formatDuration(record.durationMs),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
+        }
         if (selected) {
             Text(
                 "✓",
                 color = Color.White,
                 modifier = Modifier
-                    .align(Alignment.BottomStart)
+                    .align(Alignment.TopStart)
                     .padding(4.dp)
                     .background(MaterialTheme.colorScheme.primary, MaterialTheme.shapes.small)
                     .padding(horizontal = 6.dp, vertical = 1.dp)
