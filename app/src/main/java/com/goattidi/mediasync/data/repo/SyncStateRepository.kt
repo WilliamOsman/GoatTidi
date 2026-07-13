@@ -63,7 +63,14 @@ class SyncStateRepository @Inject constructor(
         dao.getByStatus(SyncStatus.UPLOADING) + dao.getByStatus(SyncStatus.QUEUED)
 
     suspend fun markUploading(id: Long) =
-        update(id) { it.copy(status = SyncStatus.UPLOADING, failureReason = null) }
+        update(id) { it.copy(status = SyncStatus.UPLOADING, failureReason = null, uploadRateBps = 0) }
+
+    suspend fun updateProgress(id: Long, bytesUploaded: Long, rateBps: Long) =
+        update(id) { it.copy(bytesUploaded = bytesUploaded, uploadRateBps = rateBps) }
+
+    /** Removes waiting items from the queue (uploads already in flight are unaffected). */
+    suspend fun cancelQueued(ids: List<Long>): Int =
+        dao.transition(ids, SyncStatus.NOT_UPLOADED, listOf(SyncStatus.QUEUED))
 
     suspend fun saveSessionUri(id: Long, sessionUri: String) =
         update(id) { it.copy(resumeSessionUri = sessionUri) }
@@ -72,7 +79,8 @@ class SyncStateRepository @Inject constructor(
         update(id) {
             it.copy(
                 status = SyncStatus.SYNCED, driveFileId = driveFileId, driveMd5 = driveMd5,
-                uploadedAt = uploadedAt, resumeSessionUri = null, failureReason = null
+                uploadedAt = uploadedAt, resumeSessionUri = null, failureReason = null,
+                bytesUploaded = 0, uploadRateBps = 0
             )
         }
         dao.getById(id)?.let { r ->
@@ -95,7 +103,8 @@ class SyncStateRepository @Inject constructor(
         update(id) {
             it.copy(
                 status = SyncStatus.FAILED, failureReason = reason, resumeSessionUri = null,
-                driveFileId = driveFileId ?: it.driveFileId
+                driveFileId = driveFileId ?: it.driveFileId,
+                bytesUploaded = 0, uploadRateBps = 0
             )
         }
 
@@ -105,14 +114,15 @@ class SyncStateRepository @Inject constructor(
 
     /** Puts an item back in the queue (retryable failure); keeps the resumable session. */
     suspend fun requeue(id: Long, reason: String? = null) =
-        update(id) { it.copy(status = SyncStatus.QUEUED, failureReason = reason) }
+        update(id) { it.copy(status = SyncStatus.QUEUED, failureReason = reason, uploadRateBps = 0) }
 
     /** File changed mid-flight (invariant #2): discard MD5 + session, upload again from scratch. */
     suspend fun requeueModified(id: Long) =
         update(id) {
             it.copy(
                 status = SyncStatus.QUEUED, localMd5 = null, md5SizeBytes = null,
-                md5DateModified = null, resumeSessionUri = null
+                md5DateModified = null, resumeSessionUri = null,
+                bytesUploaded = 0, uploadRateBps = 0
             )
         }
 

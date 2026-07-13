@@ -121,6 +121,7 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
                         when {
                             state.screen == Screen.RECLAIM -> "Free up space"
                             state.screen == Screen.SETTINGS -> "Settings"
+                            state.screen == Screen.QUEUE -> "Upload queue"
                             state.selectionMode -> "${state.selected.size} selected"
                             else -> "GoatTidi · ${state.syncedCount}/${state.totalCount} synced"
                         },
@@ -153,6 +154,7 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
                 !permissionGranted -> PermissionExplainer { permissionLauncher.launch(requiredPermissions()) }
                 state.screen == Screen.GALLERY -> GalleryContent(state, viewModel)
                 state.screen == Screen.SETTINGS -> SettingsContent(state, viewModel)
+                state.screen == Screen.QUEUE -> QueueContent(state, viewModel)
                 else -> ReclaimContent(state, viewModel)
             }
         }

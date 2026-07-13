@@ -54,7 +54,12 @@ class SyncWorker @AssistedInject constructor(
         return if (retry) Result.retry() else Result.success()
     }
 
-    private suspend fun processOne(record: SyncRecord): ItemResult {
+    private suspend fun processOne(stale: SyncRecord): ItemResult {
+        // Re-read: the user may have canceled this item since the batch was fetched
+        val record = repository.getById(stale.mediaStoreId) ?: return ItemResult.DONE
+        if (record.status != SyncStatus.QUEUED && record.status != SyncStatus.UPLOADING) {
+            return ItemResult.DONE
+        }
         val stat = localFiles.stat(record)
         if (stat == null) {
             repository.markFailed(record.mediaStoreId, "Local file no longer exists")
@@ -152,6 +157,10 @@ class SyncWorker @AssistedInject constructor(
                 }
             }
         }
+        // Smoothed transfer rate across chunk confirmations (EMA, 30% new sample)
+        var lastBytes = -1L
+        var lastTimeMs = 0L
+        var rateBps = 0L
         return uploader.upload(
             DriveUploader.UploadRequest(
                 fileName = record.fileName,
@@ -164,6 +173,14 @@ class SyncWorker @AssistedInject constructor(
             { offset -> localFiles.open(record, offset) },
             onSessionEstablished = { repository.saveSessionUri(record.mediaStoreId, it) },
             onProgress = { confirmed ->
+                val now = System.currentTimeMillis()
+                if (lastBytes in 0..confirmed && now > lastTimeMs) {
+                    val instant = (confirmed - lastBytes) * 1000 / (now - lastTimeMs)
+                    rateBps = if (rateBps == 0L) instant else (rateBps * 7 + instant * 3) / 10
+                }
+                lastBytes = confirmed
+                lastTimeMs = now
+                repository.updateProgress(record.mediaStoreId, confirmed, rateBps)
                 setProgress(workDataOf(KEY_MEDIA_ID to record.mediaStoreId, KEY_BYTES to confirmed))
             }
         )

@@ -23,7 +23,7 @@ class Converters {
 
 @Database(
     entities = [SyncRecord::class, UploadedContent::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -51,6 +51,14 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE sync_records ADD COLUMN durationMs INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /** v4: live upload progress + rate for the queue screen. */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sync_records ADD COLUMN bytesUploaded INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE sync_records ADD COLUMN uploadRateBps INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

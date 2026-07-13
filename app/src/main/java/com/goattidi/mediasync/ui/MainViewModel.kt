@@ -36,7 +36,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import javax.inject.Inject
 
-enum class Screen { GALLERY, RECLAIM, SETTINGS }
+enum class Screen { GALLERY, RECLAIM, SETTINGS, QUEUE }
 
 enum class Filter(val label: String) {
     ALL("All"),
@@ -81,7 +81,9 @@ class MainViewModel @Inject constructor(
         val wifiOnly: Boolean = true,
         val chargingOnly: Boolean = false,
         val dedupFolder: String = "",
-        val folderPicker: FolderPicker? = null
+        val folderPicker: FolderPicker? = null,
+        /** Active work: UPLOADING first, then QUEUED, then FAILED. */
+        val queue: List<SyncRecord> = emptyList()
     ) {
         val selectionMode: Boolean get() = selected.isNotEmpty()
     }
@@ -112,7 +114,19 @@ class MainViewModel @Inject constructor(
             layout = p.layout,
             wifiOnly = p.wifiOnly,
             chargingOnly = p.chargingOnly,
-            dedupFolder = p.dedupFolder
+            dedupFolder = p.dedupFolder,
+            queue = records
+                .filter {
+                    it.status == SyncStatus.UPLOADING || it.status == SyncStatus.QUEUED ||
+                        it.status == SyncStatus.FAILED
+                }
+                .sortedBy {
+                    when (it.status) {
+                        SyncStatus.UPLOADING -> 0
+                        SyncStatus.QUEUED -> 1
+                        else -> 2
+                    }
+                }
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
@@ -289,6 +303,12 @@ class MainViewModel @Inject constructor(
     fun openGallery() = ui.update { it.copy(screen = Screen.GALLERY) }
 
     fun openSettings() = ui.update { it.copy(screen = Screen.SETTINGS) }
+
+    fun openQueue() = ui.update { it.copy(screen = Screen.QUEUE) }
+
+    fun cancelQueued(id: Long) {
+        viewModelScope.launch { repository.cancelQueued(listOf(id)) }
+    }
 
     fun saveFolderName(name: String) {
         viewModelScope.launch {

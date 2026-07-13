@@ -39,7 +39,11 @@ data class SyncRecord(
     val uploadedAt: Long?,
     val status: SyncStatus,
     val failureReason: String?,
-    val resumeSessionUri: String?
+    val resumeSessionUri: String?,
+    /** Bytes confirmed by Drive for the in-flight upload (progress display). */
+    val bytesUploaded: Long = 0,
+    /** Smoothed upload speed in bytes/sec while UPLOADING; 0 when idle. */
+    val uploadRateBps: Long = 0
 ) {
     /** True if the cached MD5 still describes the file MediaStore currently reports. */
     val md5IsCurrent: Boolean
