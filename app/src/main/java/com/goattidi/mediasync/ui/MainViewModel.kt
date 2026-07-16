@@ -338,12 +338,17 @@ class MainViewModel @Inject constructor(
 
     /** Constraint changes must re-enqueue pending work or the old constraints keep applying. */
     private suspend fun rescheduleIfQueueActive() {
-        val hasPending = state.value.queue.any {
-            it.status == SyncStatus.QUEUED || it.status == SyncStatus.UPLOADING
-        }
-        if (hasPending) {
+        if (repository.uploadBatch().isNotEmpty()) {
             scheduler.scheduleNow(settings.wifiOnly.first(), settings.chargingOnly.first())
         }
+    }
+
+    init {
+        // Revive any leftover queue on app open. Background starts can be denied
+        // (OEM battery managers) and WorkManager backoff can stretch to hours;
+        // opening the app is clear intent to sync, and a foreground (re)schedule
+        // resets the backoff and is always allowed to start the upload service.
+        viewModelScope.launch { rescheduleIfQueueActive() }
     }
 
     fun requestDelete(id: Long) {
