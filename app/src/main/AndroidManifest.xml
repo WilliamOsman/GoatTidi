@@ -16,9 +16,10 @@
 
     <application
         android:name=".GoatTidiApp"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="GoatTidi"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar"
-        tools:ignore="MissingApplicationIcon">
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <!-- On-demand WorkManager init: configuration comes from GoatTidiApp (Hilt factory) -->
         <provider
             android:name="androidx.startup.InitializationProvider"

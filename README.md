@@ -1,3 +1,5 @@
+<img src="GoatTidi_icon.png" alt="GoatTidi app icon: a cartoon goat beside a trash can" width="112" align="right">
+
 # GoatTidi
 
 An Android app for choosing exactly which photos, videos, and audio recordings go to Google Drive — with a per-file sync status you can trust, and a safe way to free up space on your phone afterwards.
