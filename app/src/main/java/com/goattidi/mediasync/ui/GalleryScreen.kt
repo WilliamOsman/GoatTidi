@@ -28,12 +28,16 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -91,6 +95,22 @@ fun GalleryContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
             .onFailure { Toast.makeText(context, "No app can open this file", Toast.LENGTH_SHORT).show() }
     }
 
+    var failureDetail by remember { mutableStateOf<SyncRecord?>(null) }
+    failureDetail?.let { record ->
+        FailureDialog(
+            record = record,
+            onRetry = {
+                viewModel.retryFailed(record.mediaStoreId)
+                failureDetail = null
+            },
+            onOpen = {
+                openInViewer(record)
+                failureDetail = null
+            },
+            onDismiss = { failureDetail = null }
+        )
+    }
+
     Column(Modifier.fillMaxSize()) {
         val active = state.queue.filter {
             it.status == SyncStatus.UPLOADING || it.status == SyncStatus.QUEUED
@@ -129,7 +149,15 @@ fun GalleryContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
 
         if (state.records.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No media found — pull the Scan action or check permissions")
+                if (state.totalCount > 0) {
+                    // Media exists; the active filter just has no matches
+                    Text("No ${state.filter.label.lowercase()} files")
+                } else {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("No photos, videos, or audio found on this device")
+                        TextButton(onClick = { viewModel.refresh() }) { Text("Scan again") }
+                    }
+                }
             }
             return@Column
         }
@@ -146,12 +174,38 @@ fun GalleryContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
                     selected = record.mediaStoreId in state.selected,
                     selectionMode = state.selectionMode,
                     onToggleSelect = { viewModel.toggleSelect(record.mediaStoreId) },
-                    onRetry = { viewModel.retryFailed(record.mediaStoreId) },
+                    onShowFailure = { failureDetail = record },
                     onOpen = { openInViewer(record) }
                 )
             }
         }
     }
+}
+
+/** Spec §4.2: tapping a failed file shows the reason and offers a retry. */
+@Composable
+private fun FailureDialog(
+    record: SyncRecord,
+    onRetry: () -> Unit,
+    onOpen: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Upload failed", style = MaterialTheme.typography.titleMedium) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(record.fileName, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    record.failureReason ?: "No reason was recorded",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onRetry) { Text("Retry") } },
+        dismissButton = { TextButton(onClick = onOpen) { Text("Open") } }
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -161,7 +215,7 @@ private fun MediaTile(
     selected: Boolean,
     selectionMode: Boolean,
     onToggleSelect: () -> Unit,
-    onRetry: () -> Unit,
+    onShowFailure: () -> Unit,
     onOpen: () -> Unit
 ) {
     // "Breathing" border while actively uploading
@@ -189,7 +243,7 @@ private fun MediaTile(
                 onClick = {
                     when {
                         selectionMode -> onToggleSelect()
-                        record.status == SyncStatus.FAILED -> onRetry()
+                        record.status == SyncStatus.FAILED -> onShowFailure()
                         else -> onOpen()
                     }
                 },
@@ -220,8 +274,7 @@ private fun MediaTile(
             )
         }
         Text(
-            text = statusBadge(record.status) +
-                if (record.status == SyncStatus.FAILED) " retry" else "",
+            text = statusBadge(record.status),
             color = Color.White,
             style = MaterialTheme.typography.labelMedium,
             modifier = Modifier
