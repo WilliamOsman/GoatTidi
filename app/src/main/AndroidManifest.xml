@@ -9,17 +9,26 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <!-- Deleting other apps' media (Free up space) before Android 11. Android 11+ asks the
+         user through MediaStore.createDeleteRequest instead, which needs no permission. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29"
+        tools:ignore="ScopedStorage" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!-- requestLegacyExternalStorage only affects Android 10: without it, scoped storage blocks
+         deleting other apps' media even with WRITE_EXTERNAL_STORAGE granted. -->
     <application
         android:name=".GoatTidiApp"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="GoatTidi"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:requestLegacyExternalStorage="true"
+        android:theme="@style/Theme.GoatTidi">
         <!-- On-demand WorkManager init: configuration comes from GoatTidiApp (Hilt factory) -->
         <provider
             android:name="androidx.startup.InitializationProvider"
