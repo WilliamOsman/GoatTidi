@@ -62,7 +62,7 @@ class DriveFolderResolverTest {
     )
 
     private fun folderFound(id: String) =
-        MockResponse().setResponseCode(200).setBody("""{"files":[{"id":"$id"}]}""")
+        MockResponse().setResponseCode(200).setBody("""{"files":[{"id":"$id","isAppAuthorized":true}]}""")
 
     private fun folderMissing() =
         MockResponse().setResponseCode(200).setBody("""{"files":[]}""")
@@ -105,6 +105,55 @@ class DriveFolderResolverTest {
         val third = resolver.resolveFolderId(record("/WhatsApp/Media/WhatsApp Video/c.mp4"))
         assertEquals("child-whatsapp", third)
         assertEquals(4, server.requestCount)
+    }
+
+    @Test
+    fun `cached root deleted on Drive is dropped and re-created`() = runTest {
+        settings.setFolderName("Root Deleted")
+        settings.setLayout(DriveLayout.FLAT)
+        settings.setCachedFolderId("gone")
+        server.enqueue(MockResponse().setResponseCode(404))  // GET cached id
+        server.enqueue(folderMissing())
+        server.enqueue(folderCreated("root-new"))
+
+        val id = resolver.resolveFolderId(record("/dcim/Camera/a.jpg"))
+
+        assertEquals("root-new", id)
+        assertEquals("root-new", settings.cachedFolderId())
+        assertTrue(server.takeRequest().path!!.startsWith("/drive/v3/files/gone"))
+    }
+
+    @Test
+    fun `cached root in the trash is replaced`() = runTest {
+        settings.setFolderName("Root Trashed")
+        settings.setLayout(DriveLayout.FLAT)
+        settings.setCachedFolderId("in-trash")
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"id":"in-trash","mimeType":"application/vnd.google-apps.folder","trashed":true}"""
+            )
+        )
+        server.enqueue(folderMissing())
+        server.enqueue(folderCreated("root-fresh"))
+
+        assertEquals("root-fresh", resolver.resolveFolderId(record("/dcim/Camera/a.jpg")))
+        assertEquals("root-fresh", settings.cachedFolderId())
+    }
+
+    @Test
+    fun `live cached root is confirmed once per process, then served from cache`() = runTest {
+        settings.setFolderName("Root Live")
+        settings.setLayout(DriveLayout.FLAT)
+        settings.setCachedFolderId("root-live")
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"id":"root-live","mimeType":"application/vnd.google-apps.folder","trashed":false}"""
+            )
+        )
+
+        assertEquals("root-live", resolver.resolveFolderId(record("/dcim/Camera/a.jpg")))
+        assertEquals("root-live", resolver.resolveFolderId(record("/dcim/Camera/b.jpg")))
+        assertEquals(1, server.requestCount)
     }
 
     @Test

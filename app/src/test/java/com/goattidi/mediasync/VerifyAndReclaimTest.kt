@@ -329,7 +329,7 @@ class VerifyAndReclaimTest {
     fun `ensureFolder returns existing folder id`() = runTest {
         server.enqueue(
             MockResponse().setResponseCode(200)
-                .setBody("""{"files":[{"id":"folder-existing","name":"Phone Media"}]}""")
+                .setBody("""{"files":[{"id":"folder-existing","name":"Phone Media","isAppAuthorized":true}]}""")
         )
 
         val id = client.ensureFolder("Phone Media")
@@ -338,6 +338,23 @@ class VerifyAndReclaimTest {
         assertEquals(1, server.requestCount)
         val req = server.takeRequest()
         assertTrue(req.path!!.contains("q="))
+    }
+
+    @Test
+    fun `ensureFolder never adopts a same-named folder the app didn't create`() = runTest {
+        // Visible through drive.readonly, but drive.file can't upload into it
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .setBody("""{"files":[{"id":"users-own","name":"Phone Media","isAppAuthorized":false}]}""")
+        )
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"id":"folder-new"}"""))
+
+        val id = client.ensureFolder("Phone Media")
+
+        assertEquals("folder-new", id)
+        val lookup = server.takeRequest()
+        assertTrue(lookup.path!!.contains("isAppAuthorized"))
+        assertEquals("POST", server.takeRequest().method)
     }
 
     @Test

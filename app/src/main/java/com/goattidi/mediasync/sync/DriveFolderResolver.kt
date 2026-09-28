@@ -2,6 +2,7 @@ package com.goattidi.mediasync.sync
 
 import com.goattidi.mediasync.data.db.SyncRecord
 import com.goattidi.mediasync.data.drive.DriveClient
+import com.goattidi.mediasync.data.drive.DriveException
 import com.goattidi.mediasync.data.repo.DriveLayout
 import com.goattidi.mediasync.data.repo.SyncSettings
 import kotlinx.coroutines.flow.first
@@ -36,9 +37,12 @@ class SettingsDriveFolderResolver @Inject constructor(
     /** Injectable for tests; wall clock in production. */
     internal var clock: () -> Long = System::currentTimeMillis
 
+    /** The cached root id already confirmed live on Drive in this process. */
+    @Volatile
+    private var confirmedRootId: String? = null
+
     override suspend fun resolveFolderId(record: SyncRecord): String? {
-        val rootId = settings.cachedFolderId()
-            ?: client.ensureFolder(settings.folderName.first()).also { settings.setCachedFolderId(it) }
+        val rootId = rootFolderId()
         val childName = when (settings.layout.first()) {
             DriveLayout.FLAT -> return rootId
             DriveLayout.BY_MONTH -> monthFolder(clock())
@@ -49,6 +53,34 @@ class SettingsDriveFolderResolver @Inject constructor(
         val childId = client.ensureFolder(childName, parentId = rootId)
         childCache[cacheKey] = childId
         return childId
+    }
+
+    /**
+     * The cached root id outlives the folder if the user deletes or trashes it on Drive,
+     * and every upload into it would then fail. Confirm it once per process; if it's
+     * gone, drop it and find-or-create again.
+     */
+    private suspend fun rootFolderId(): String {
+        settings.cachedFolderId()?.let { cached ->
+            if (cached == confirmedRootId) return cached
+            if (isLiveFolder(cached)) {
+                confirmedRootId = cached
+                return cached
+            }
+            settings.clearCachedFolderId()
+            childCache.clear()
+        }
+        val id = client.ensureFolder(settings.folderName.first())
+        settings.setCachedFolderId(id)
+        confirmedRootId = id
+        return id
+    }
+
+    private suspend fun isLiveFolder(id: String): Boolean = try {
+        val folder = client.getFile(id, fields = "id,mimeType,trashed")
+        folder.isFolder && !folder.trashed
+    } catch (e: DriveException.NotFound) {
+        false
     }
 
     private fun monthFolder(timestamp: Long): String =

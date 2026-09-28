@@ -146,20 +146,34 @@ class DriveClient(
             }
         }
 
-    /** Finds a folder by name (optionally under a parent). Never creates. */
-    suspend fun findFolder(name: String, parentId: String? = null): String? {
+    /**
+     * Finds any folder by name (optionally under a parent) — including the user's own
+     * folders, since drive.readonly is granted for the duplicate index. Never creates.
+     */
+    suspend fun findFolder(name: String, parentId: String? = null): String? =
+        searchFolders(name, parentId).firstOrNull()?.id
+
+    /**
+     * Like [findFolder], but only matches folders this app created. Destination lookups
+     * must use this: a same-named folder of the user's is visible via drive.readonly, but
+     * drive.file gives no write access to it, so every upload into it would fail.
+     */
+    suspend fun findOwnFolder(name: String, parentId: String? = null): String? =
+        searchFolders(name, parentId).firstOrNull { it.isAppAuthorized }?.id
+
+    private suspend fun searchFolders(name: String, parentId: String?): List<DriveFile> {
         val escaped = name.replace("\\", "\\\\").replace("'", "\\'")
         var query = "name = '$escaped' and mimeType = '$DRIVE_FOLDER_MIME' and trashed = false"
         if (parentId != null) query += " and '$parentId' in parents"
         val encoded = java.net.URLEncoder.encode(query, "UTF-8")
         return send { token ->
             Request.Builder()
-                .url("$base/drive/v3/files?q=$encoded&fields=files(id,name)&spaces=drive")
+                .url("$base/drive/v3/files?q=$encoded&fields=files(id,name,isAppAuthorized)&pageSize=1000&spaces=drive")
                 .get()
                 .header("Authorization", "Bearer $token")
                 .build()
         }.use { resp ->
-            json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty()).files.firstOrNull()?.id
+            json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty()).files
         }
     }
 
@@ -174,9 +188,12 @@ class DriveClient(
         return parent
     }
 
-    /** Finds-or-creates the app's destination folder. Returns its Drive file id. */
+    /**
+     * Finds-or-creates the app's destination folder. Returns its Drive file id. Only ever
+     * reuses a folder this app created — never a same-named folder of the user's.
+     */
     suspend fun ensureFolder(name: String, parentId: String? = null): String {
-        findFolder(name, parentId)?.let { return it }
+        findOwnFolder(name, parentId)?.let { return it }
         val metadata = buildJsonObject {
             put("name", name)
             put("mimeType", DRIVE_FOLDER_MIME)

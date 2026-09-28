@@ -12,7 +12,9 @@ data class DriveFile(
     val md5Checksum: String? = null,
     val size: String? = null,
     val mimeType: String? = null,
-    val trashed: Boolean = false
+    val trashed: Boolean = false,
+    /** True when this app created (or was granted) the file; only sent when requested in `fields`. */
+    val isAppAuthorized: Boolean = false
 ) {
     val isFolder: Boolean get() = mimeType == DRIVE_FOLDER_MIME
 }

@@ -85,6 +85,10 @@ class SyncSettings @Inject constructor(
         context.dataStore.edit { it[keyFolderId] = id }
     }
 
+    suspend fun clearCachedFolderId() {
+        context.dataStore.edit { it.remove(keyFolderId) }
+    }
+
     companion object {
         const val DEFAULT_FOLDER_NAME = "Phone Media"
     }
