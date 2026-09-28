@@ -197,7 +197,9 @@ class MainViewModel @Inject constructor(
             } catch (e: Exception) {
                 driveErrorMessage(e)
             }
-            ui.update { it.copy(busy = false, message = text) }
+            // Verify can demote files (orphaned / modified), so the reclaim list must be re-read
+            val candidates = reclaimEngine.candidates()
+            ui.update { it.copy(busy = false, message = text, reclaimCandidates = candidates) }
         }
     }
 

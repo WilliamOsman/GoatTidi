@@ -69,8 +69,8 @@ private fun DriveStatusCell(record: SyncRecord, modifier: Modifier = Modifier) {
 fun ReclaimContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
     Column(Modifier.fillMaxSize()) {
         Text(
-            "Verified-synced files, biggest first. Every delete re-checks that the file's " +
-                "current bytes are still on Drive before anything is removed.",
+            "Every delete re-checks that the file's current bytes are still on Drive " +
+                "before anything is removed.",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(12.dp)
         )

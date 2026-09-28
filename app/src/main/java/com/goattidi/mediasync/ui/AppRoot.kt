@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -39,12 +40,14 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -142,56 +145,75 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    when {
-                        state.screen != Screen.GALLERY ->
-                            TextButton(onClick = { viewModel.openGallery() }) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
+            Box(Modifier.fillMaxWidth()) {
+                TopAppBar(
+                    navigationIcon = {
+                        when {
+                            state.screen != Screen.GALLERY ->
+                                TextButton(onClick = { viewModel.openGallery() }) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Gallery")
+                                }
+                            state.selectionMode ->
+                                IconButton(onClick = { viewModel.clearSelection() }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Clear selection")
+                                }
+                        }
+                    },
+                    title = {
+                        when {
+                            state.screen == Screen.RECLAIM -> Text("Free up space")
+                            state.screen == Screen.SETTINGS -> Text("Settings")
+                            state.screen == Screen.QUEUE -> Text("Upload queue")
+                            state.selectionMode -> Text("${state.selected.size} selected")
+                            else -> Column {
+                                Text("GoatTidi", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    if (state.uploadSelectedCount == 0) "None selected"
+                                    else "${state.syncedCount}/${state.uploadSelectedCount} synced",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                                Spacer(Modifier.width(6.dp))
-                                Text("Gallery")
                             }
-                        state.selectionMode ->
-                            IconButton(onClick = { viewModel.clearSelection() }) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear selection")
+                        }
+                    },
+                    actions = {
+                        when {
+                            state.screen == Screen.RECLAIM ->
+                                OverflowMenu(listOf("Verify with Drive" to viewModel::verify))
+                            state.screen != Screen.GALLERY -> {}
+                            state.selectionMode ->
+                                TextButton(onClick = { viewModel.syncSelected() }) { Text("Upload") }
+                            else -> {
+                                IconButton(onClick = { viewModel.openSettings() }) {
+                                    Icon(Icons.Default.Settings, contentDescription = "Settings")
+                                }
+                                OverflowMenu(
+                                    listOf(
+                                        "Upload queue" to viewModel::openQueue,
+                                        "Connect Google Drive" to viewModel::connectDrive
+                                    )
+                                )
                             }
-                    }
-                },
-                title = {
-                    when {
-                        state.screen == Screen.RECLAIM -> Text("Free up space")
-                        state.screen == Screen.SETTINGS -> Text("Settings")
-                        state.screen == Screen.QUEUE -> Text("Upload queue")
-                        state.selectionMode -> Text("${state.selected.size} selected")
-                        else -> Column {
-                            Text("GoatTidi", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                if (state.uploadSelectedCount == 0) "Nothing selected for upload"
-                                else "${state.syncedCount}/${state.uploadSelectedCount} synced",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
                         }
                     }
-                },
-                actions = {
-                    when {
-                        state.screen != Screen.GALLERY -> {}
-                        state.selectionMode ->
-                            TextButton(onClick = { viewModel.syncSelected() }) { Text("Upload") }
-                        else -> {
-                            IconButton(onClick = { viewModel.openSettings() }) {
-                                Icon(Icons.Default.Settings, contentDescription = "Settings")
-                            }
-                            OverflowMenu(viewModel)
-                        }
-                    }
+                )
+                if (state.screen == Screen.GALLERY && !state.selectionMode) {
+                    // Overlaid rather than in the title slot so it sits at the true screen center,
+                    // independent of the title and action widths
+                    TextButton(
+                        onClick = { viewModel.openReclaim() },
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .windowInsetsPadding(TopAppBarDefaults.windowInsets)
+                    ) { Text("Free up space") }
                 }
-            )
+            }
         },
         snackbarHost = { SnackbarHost(snackbar) }
     ) { padding ->
@@ -209,19 +231,14 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
 }
 
 @Composable
-private fun OverflowMenu(viewModel: MainViewModel) {
+private fun OverflowMenu(items: List<Pair<String, () -> Unit>>) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
             Icon(Icons.Default.MoreVert, contentDescription = "More options")
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            listOf(
-                "Upload queue" to viewModel::openQueue,
-                "Verify with Drive" to viewModel::verify,
-                "Free up space" to viewModel::openReclaim,
-                "Connect Google Drive" to viewModel::connectDrive
-            ).forEach { (label, action) ->
+            items.forEach { (label, action) ->
                 DropdownMenuItem(
                     text = { Text(label) },
                     onClick = {
