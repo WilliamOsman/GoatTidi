@@ -5,6 +5,9 @@ import java.io.IOException
 
 const val DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 
+/** Drive's alias for the top of My Drive; as the sync-search folder it means "entire Drive". */
+const val DRIVE_ROOT_ID = "root"
+
 @Serializable
 data class DriveFile(
     val id: String,

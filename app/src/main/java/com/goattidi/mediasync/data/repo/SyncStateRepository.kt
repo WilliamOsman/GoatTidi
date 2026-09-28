@@ -96,6 +96,9 @@ class SyncStateRepository @Inject constructor(
 
     suspend fun forgetUploaded(md5: String) = uploadedDao.deleteByMd5(md5.lowercase())
 
+    /** Empty after a fresh install or cleared app data — the ledger must be rebuilt from Drive. */
+    suspend fun ledgerIsEmpty(): Boolean = uploadedDao.count() == 0
+
     suspend fun recordUploaded(md5: String, driveFileId: String, fileName: String, sizeBytes: Long, uploadedAt: Long) =
         uploadedDao.upsert(UploadedContent(md5.lowercase(), driveFileId, fileName, sizeBytes, uploadedAt))
 

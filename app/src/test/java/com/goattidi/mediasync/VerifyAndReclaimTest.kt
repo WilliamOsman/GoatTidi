@@ -327,6 +327,33 @@ class VerifyAndReclaimTest {
     }
 
     @Test
+    fun `entire-Drive sync search lists the user's own files flat instead of walking folders`() = runTest {
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[
+                    {"id":"d1","name":"a.jpg","md5Checksum":"1111","size":"10"},
+                    {"id":"d2","name":"a-doc"}
+                ],"nextPageToken":"p2"}"""
+            )
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[{"id":"d3","name":"b.mp4","md5Checksum":"2222","size":"20"}]}"""
+            )
+        )
+
+        val imported = VerifyEngine(repo, client).importExternalFolderById("root", policy)
+
+        assertEquals(2, imported) // the checksum-less Doc is skipped
+        assertEquals("d1", db.uploadedContentDao().getByMd5("1111")!!.driveFileId)
+        assertEquals("d3", db.uploadedContentDao().getByMd5("2222")!!.driveFileId)
+        assertEquals(2, server.requestCount) // no folder validation, no per-folder walk
+        val first = java.net.URLDecoder.decode(server.takeRequest().path!!, "UTF-8")
+        assertTrue(first.contains("'me' in owners")) // files merely shared with the user are excluded
+        assertTrue(server.takeRequest().path!!.contains("pageToken=p2"))
+    }
+
+    @Test
     fun `external folder import by id returns null when folder was deleted`() = runTest {
         server.enqueue(MockResponse().setResponseCode(404))
 

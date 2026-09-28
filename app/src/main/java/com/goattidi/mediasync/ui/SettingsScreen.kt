@@ -1,5 +1,6 @@
 package com.goattidi.mediasync.ui
 
+import android.text.format.DateUtils
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,6 +39,25 @@ private fun layoutLabel(layout: DriveLayout): String = when (layout) {
     DriveLayout.FLAT -> "All in one folder"
     DriveLayout.BY_MONTH -> "By upload month (e.g. 2026-07)"
     DriveLayout.MIRROR_LOCAL -> "By source folder (Camera, WhatsApp…)"
+}
+
+/** Names the folders sync detection covers, so the text changes with the toggle and folder. */
+private fun syncDetectionDescription(state: MainViewModel.UiState): String {
+    val base = "Files this app uploaded stay synced even if you move them out of ${state.folderName}/."
+    return when {
+        state.dedupFolder.isBlank() -> base
+        state.syncSearchEntireDrive ->
+            "$base Files already anywhere in your Drive are recognized too, so they aren't uploaded twice."
+        else -> "$base Files already in ${state.dedupFolder}/ are recognized too, so they aren't uploaded twice."
+    }
+}
+
+private fun syncScanStatus(state: MainViewModel.UiState): String = when {
+    state.syncScanning -> "Scanning…"
+    state.lastSyncScanAt == 0L -> "Not scanned yet"
+    else -> "Last scanned " + DateUtils.getRelativeTimeSpanString(
+        state.lastSyncScanAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS
+    ).toString().replaceFirstChar { it.lowercase() }
 }
 
 @Composable
@@ -125,28 +145,37 @@ fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
 
         HorizontalDivider()
 
-        Text("Duplicate detection", style = MaterialTheme.typography.titleMedium)
-        Text(
-            if (state.dedupFolder.isBlank()) "Off — recognizes files this app uploaded, even after you move them in Drive"
-            else "Also checking: ${state.dedupFolder}",
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Row {
-            TextButton(onClick = { viewModel.openFolderPicker() }) { Text("Choose Drive folder…") }
-            if (state.dedupFolder.isNotBlank()) {
-                TextButton(onClick = { viewModel.clearDedupFolder() }) { Text("Clear") }
+        Text("Sync detection", style = MaterialTheme.typography.titleMedium)
+        Text(syncDetectionDescription(state), style = MaterialTheme.typography.bodyMedium)
+        val expanded = state.dedupFolder.isNotBlank()
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) {
+                Text("Expand sync search to other folders")
+                Text(
+                    "Avoid duplicate uploads by finding files already on your Drive. " +
+                        "Asks Google for read-only access to your Drive.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = expanded, onCheckedChange = { viewModel.setSyncSearchExpanded(it) })
+        }
+        if (expanded) {
+            TextButton(onClick = { viewModel.openFolderPicker() }) {
+                Text(if (state.syncSearchEntireDrive) "Choose Drive folder…" else "Change Drive folder…")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    syncScanStatus(state),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { viewModel.rescanNow() }, enabled = !state.syncScanning) {
+                    Text("Rescan now")
+                }
             }
         }
-        TextButton(onClick = { viewModel.relinkFromDrive() }) { Text("Rebuild duplicate index") }
-        Text(
-            "Rebuild scans this app's own uploads (any folder) plus the folder tree above — " +
-                "including files uploaded by other tools — and indexes their checksums. " +
-                "Anything whose exact bytes are already on Drive is marked synced instead of " +
-                "re-uploaded. Choosing a folder asks Google for read-only access to your Drive, " +
-                "which the app uses only to scan that folder tree. Clear stops the app requesting it.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
 
         HorizontalDivider()
 

@@ -3,6 +3,7 @@ package com.goattidi.mediasync.data.repo
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -69,6 +70,15 @@ class SyncSettings @Inject constructor(
 
     suspend fun setExternalReadEnabled(value: Boolean) {
         context.dataStore.edit { it[keyExternalRead] = value }
+    }
+
+    private val keyLastSyncScan = longPreferencesKey("sync_search_scanned_at")
+
+    /** When the sync-search folder was last indexed (epoch ms); 0 = never. */
+    val lastSyncScanAt: Flow<Long> = context.dataStore.data.map { it[keyLastSyncScan] ?: 0L }
+
+    suspend fun setLastSyncScanAt(value: Long) {
+        context.dataStore.edit { it[keyLastSyncScan] = value }
     }
 
     suspend fun setDedupFolder(path: String, id: String = "") {

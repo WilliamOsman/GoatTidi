@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.goattidi.mediasync.data.db.MediaType
 import com.goattidi.mediasync.data.db.SyncRecord
 import com.goattidi.mediasync.data.db.SyncStatus
+import com.goattidi.mediasync.data.drive.DRIVE_ROOT_ID
 import com.goattidi.mediasync.data.drive.DriveAuthConsentRequired
 import com.goattidi.mediasync.data.drive.DriveAuthProvider
 import com.goattidi.mediasync.data.drive.DriveClient
@@ -86,6 +87,11 @@ class MainViewModel @Inject constructor(
         val folderPicker: FolderPicker? = null,
         /** null until checked; set by the Settings status check and every connect attempt. */
         val driveConnected: Boolean? = null,
+        /** Sync search covers the whole Drive (the default once expanded) rather than one folder. */
+        val syncSearchEntireDrive: Boolean = false,
+        /** When the sync-search index was last rebuilt (epoch ms); 0 = never. */
+        val lastSyncScanAt: Long = 0,
+        val syncScanning: Boolean = false,
         /** Active work: UPLOADING first, then QUEUED, then FAILED. */
         val queue: List<SyncRecord> = emptyList()
     ) {
@@ -96,6 +102,9 @@ class MainViewModel @Inject constructor(
 
     /** What to resume once Google's consent screen returns; null = a plain connect. */
     private var afterConsent: (() -> Unit)? = null
+
+    /** Set once this process has confirmed (or rebuilt) the own-upload ledger. */
+    private var ledgerChecked = false
 
     private data class Prefs(
         val folderName: String,
@@ -180,7 +189,6 @@ class MainViewModel @Inject constructor(
             val ids = ui.value.selected.toList()
             if (ids.isEmpty()) return@launch
             val queued = repository.enqueue(ids)
-            scheduler.scheduleNow(settings.wifiOnly.first(), settings.chargingOnly.first())
             ui.update { it.copy(selected = emptySet(), message = "$queued file(s) queued for upload") }
             // The worker runs in the background and can't show Google's consent screen, so
             // without this a first-time user's queue just stalls on "authorization required".
@@ -195,6 +203,9 @@ class MainViewModel @Inject constructor(
             } catch (e: Exception) {
                 null // Network and other transient errors are the worker's to retry
             }
+            // Before the worker starts: after a reinstall it must know what's already on Drive
+            if (authError == null) runCatching { ensureOwnLedger() }
+            scheduler.scheduleNow(settings.wifiOnly.first(), settings.chargingOnly.first())
             if (authError != null) {
                 val text = driveErrorMessage(authError)
                 ui.update { it.copy(driveConnected = false, message = text) }
@@ -236,7 +247,7 @@ class MainViewModel @Inject constructor(
             try {
                 authProvider.authorizeExternalRead()
                 settings.setExternalReadEnabled(true)
-                loadPickerLevel(listOf("root" to "My Drive"))
+                loadPickerLevel(listOf(DRIVE_ROOT_ID to ENTIRE_DRIVE_LABEL))
             } catch (e: Exception) {
                 if (e is DriveAuthConsentRequired) afterConsent = ::openFolderPicker
                 val text = driveErrorMessage(e)
@@ -266,26 +277,104 @@ class MainViewModel @Inject constructor(
     fun pickerSelect() {
         val picker = ui.value.folderPicker ?: return
         val (id, _) = picker.breadcrumb.last()
-        val path = picker.breadcrumb.drop(1).joinToString("/") { it.second }.ifEmpty { "My Drive" }
+        val path = picker.breadcrumb.drop(1).joinToString("/") { it.second }.ifEmpty { ENTIRE_DRIVE_LABEL }
         viewModelScope.launch {
             settings.setDedupFolder(path, id)
+            ui.update { it.copy(folderPicker = null) }
+            runSyncScan(announce = true)
+        }
+    }
+
+    // ---- Sync detection: opt-in search for files already on Drive (drive.readonly) ----
+
+    fun setSyncSearchExpanded(enabled: Boolean) {
+        if (enabled) enableSyncSearch() else disableSyncSearch()
+    }
+
+    /** Asks for drive.readonly, then searches the entire Drive until the user narrows it to a folder. */
+    private fun enableSyncSearch() {
+        viewModelScope.launch {
+            try {
+                authProvider.authorizeExternalRead()
+            } catch (e: Exception) {
+                if (e is DriveAuthConsentRequired) afterConsent = ::enableSyncSearch
+                val text = driveErrorMessage(e)
+                ui.update { it.copy(message = text) }
+                return@launch
+            }
+            settings.setExternalReadEnabled(true)
+            settings.setDedupFolder(ENTIRE_DRIVE_LABEL, DRIVE_ROOT_ID)
+            runSyncScan(announce = true)
+        }
+    }
+
+    private fun disableSyncSearch() {
+        viewModelScope.launch {
+            settings.setDedupFolder("", "")
+            settings.setExternalReadEnabled(false)
+            settings.setLastSyncScanAt(0)
             ui.update {
-                it.copy(
-                    folderPicker = null,
-                    message = "Duplicate-check folder: $path — run \"Rebuild duplicate index\" to scan it"
-                )
+                it.copy(message = "Sync search limited to this app's uploads — it no longer requests read access to your Drive")
             }
         }
     }
 
-    fun clearDedupFolder() {
-        viewModelScope.launch {
-            settings.setDedupFolder("", "")
-            settings.setExternalReadEnabled(false)
-            ui.update {
-                it.copy(message = "Duplicate-check folder cleared — the app no longer requests read access to your Drive")
+    fun rescanNow() {
+        viewModelScope.launch { runSyncScan(announce = true) }
+    }
+
+    /**
+     * Rebuilds the sync index: the app's own uploads (wherever they've been moved) plus
+     * the sync-search folder, if set. Announced scans report to the snackbar and may
+     * launch Google's consent screen; silent ones (the stale refresh on app open) never do.
+     */
+    private suspend fun runSyncScan(announce: Boolean) {
+        ui.update { it.copy(syncScanning = true, busy = it.busy || announce) }
+        val text = try {
+            val externalId = settings.dedupFolderId.first().trim()
+            val externalPath = settings.dedupFolder.first().trim()
+            // The entire-Drive listing already includes the app's own uploads
+            val own = if (externalId == DRIVE_ROOT_ID) 0 else verifyEngine.importLedgerFromDrive()
+            ledgerChecked = true
+            val imported = when {
+                externalId.isNotEmpty() -> verifyEngine.importExternalFolderById(externalId)
+                externalPath.isNotEmpty() -> verifyEngine.importExternalFolder(externalPath)
+                else -> 0
             }
+            if (imported != null) settings.setLastSyncScanAt(System.currentTimeMillis())
+            when {
+                externalId == DRIVE_ROOT_ID -> "Sync search: indexed $imported file(s) across your Drive"
+                externalPath.isEmpty() -> "Sync search: indexed $own of this app's upload(s)"
+                imported == null -> "Sync search folder \"$externalPath\" is gone from Drive — choose another"
+                else -> "Sync search: indexed $imported file(s) in \"$externalPath\" and $own of this app's upload(s)"
+            }
+        } catch (e: Exception) {
+            if (announce) driveErrorMessage(e) else null
         }
+        ui.update {
+            it.copy(
+                syncScanning = false,
+                busy = if (announce) false else it.busy,
+                message = if (announce) text else it.message
+            )
+        }
+    }
+
+    /** App-open refresh so files added to Drive from elsewhere get picked up without a button. */
+    private suspend fun refreshSyncSearchIfStale() {
+        if (settings.dedupFolder.first().isBlank()) return
+        val age = System.currentTimeMillis() - settings.lastSyncScanAt.first()
+        if (age >= SYNC_SCAN_MAX_AGE_MS) runSyncScan(announce = false)
+    }
+
+    /**
+     * The ledger is empty after a reinstall or cleared app data; without a rebuild the
+     * worker would upload everything already on Drive a second time. Once per process.
+     */
+    private suspend fun ensureOwnLedger() {
+        if (ledgerChecked) return
+        if (repository.ledgerIsEmpty()) verifyEngine.importLedgerFromDrive()
+        ledgerChecked = true
     }
 
     private fun loadPickerLevel(breadcrumb: List<Pair<String, String>>) {
@@ -300,40 +389,12 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Rebuilds the dedup index: the app's own uploads (any folder) plus, if
-     * configured, the user-designated external folder tree (rclone uploads etc.).
-     */
-    fun relinkFromDrive() {
-        viewModelScope.launch {
-            ui.update { it.copy(busy = true) }
-            val text = try {
-                val own = verifyEngine.importLedgerFromDrive()
-                val externalId = settings.dedupFolderId.first().trim()
-                val externalPath = settings.dedupFolder.first().trim()
-                val imported = when {
-                    externalId.isNotEmpty() -> verifyEngine.importExternalFolderById(externalId)
-                    externalPath.isNotEmpty() -> verifyEngine.importExternalFolder(externalPath)
-                    else -> 0
-                }
-                val externalMsg = when {
-                    externalPath.isEmpty() -> ""
-                    imported == null -> " · folder \"$externalPath\" is gone from Drive — re-select it"
-                    else -> " · indexed $imported file(s) under \"$externalPath\""
-                }
-                "Re-linked $own app upload(s)$externalMsg — duplicates of these won't re-upload"
-            } catch (e: Exception) {
-                driveErrorMessage(e)
-            }
-            ui.update { it.copy(busy = false, message = text) }
-        }
-    }
-
     fun connectDrive() {
         viewModelScope.launch {
             try {
                 authProvider.accessToken()
                 ui.update { it.copy(driveConnected = true, message = "Google Drive connected") }
+                runCatching { ensureOwnLedger() }
                 // Auth failures park the worker in backoff; don't make a waiting queue sit it out
                 rescheduleIfQueueActive()
             } catch (e: Exception) {
@@ -420,6 +481,13 @@ class MainViewModel @Inject constructor(
         // opening the app is clear intent to sync, and a foreground (re)schedule
         // resets the backoff and is always allowed to start the upload service.
         viewModelScope.launch { rescheduleIfQueueActive() }
+        viewModelScope.launch {
+            combine(settings.dedupFolderId, settings.lastSyncScanAt) { id, at -> id to at }
+                .collect { (id, at) ->
+                    ui.update { it.copy(syncSearchEntireDrive = id == DRIVE_ROOT_ID, lastSyncScanAt = at) }
+                }
+        }
+        viewModelScope.launch { refreshSyncSearchIfStale() }
     }
 
     fun requestDelete(id: Long) {
@@ -502,5 +570,11 @@ class MainViewModel @Inject constructor(
         is DriveException.StorageQuotaExceeded -> "Google Drive storage is full"
         is DriveException -> "Google Drive error: ${e.message}"
         else -> "Error: ${e.message}"
+    }
+
+    private companion object {
+        /** Picker label for the top of My Drive; as the sync-search folder it means "entire Drive". */
+        const val ENTIRE_DRIVE_LABEL = "My Drive"
+        const val SYNC_SCAN_MAX_AGE_MS = 24 * 60 * 60 * 1000L
     }
 }

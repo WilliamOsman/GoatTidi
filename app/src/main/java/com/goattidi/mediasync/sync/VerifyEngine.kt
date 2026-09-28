@@ -1,5 +1,6 @@
 package com.goattidi.mediasync.sync
 
+import com.goattidi.mediasync.data.drive.DRIVE_ROOT_ID
 import com.goattidi.mediasync.data.drive.DriveClient
 import com.goattidi.mediasync.data.drive.DriveException
 import com.goattidi.mediasync.data.drive.RetryPolicy
@@ -107,6 +108,7 @@ class VerifyEngine @Inject constructor(
 
     /** Same import, but by folder id (picker selection) — survives folder renames/moves. */
     suspend fun importExternalFolderById(folderId: String, retryPolicy: RetryPolicy = RetryPolicy()): Int? {
+        if (folderId == DRIVE_ROOT_ID) return importEntireDrive(retryPolicy)
         val folder = try {
             withRetry(retryPolicy) { client.getFile(folderId, fields = "id,trashed") }
         } catch (e: DriveException.NotFound) {
@@ -114,6 +116,23 @@ class VerifyEngine @Inject constructor(
         }
         if (folder.trashed) return null
         return walkAndImport(folderId, retryPolicy)
+    }
+
+    /** Whole-Drive variant: one flat listing of the user's own files, no folder walk. */
+    private suspend fun importEntireDrive(retryPolicy: RetryPolicy): Int {
+        var imported = 0
+        var pageToken: String? = null
+        val now = System.currentTimeMillis()
+        do {
+            val page = withRetry(retryPolicy) { client.listOwnedFiles(pageToken) }
+            for (file in page.files) {
+                val md5 = file.md5Checksum ?: continue
+                repository.recordUploaded(md5, file.id, file.name ?: "", file.size?.toLongOrNull() ?: 0L, now)
+                imported++
+            }
+            pageToken = page.nextPageToken
+        } while (pageToken != null)
+        return imported
     }
 
     private suspend fun walkAndImport(rootId: String, retryPolicy: RetryPolicy): Int {

@@ -262,6 +262,25 @@ class DriveClient(
         }
     }
 
+    /**
+     * Pages through every non-folder file the user owns (needs drive.readonly) — the
+     * "entire Drive" sync search. One flat listing instead of a folder-by-folder walk.
+     * Files merely shared with the user are left out: their owner can delete them.
+     */
+    suspend fun listOwnedFiles(pageToken: String? = null, pageSize: Int = 1000): DriveFileList {
+        val q = java.net.URLEncoder.encode(
+            "trashed = false and mimeType != '$DRIVE_FOLDER_MIME' and 'me' in owners", "UTF-8"
+        )
+        var url = "$base/drive/v3/files?q=$q" +
+            "&fields=nextPageToken,files(id,name,md5Checksum,size)&pageSize=$pageSize&spaces=drive"
+        if (pageToken != null) url += "&pageToken=$pageToken"
+        return send { token ->
+            Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
+        }.use { resp ->
+            json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty())
+        }
+    }
+
     suspend fun getFile(fileId: String, fields: String = "id,name,md5Checksum,size,trashed"): DriveFile =
         send { token ->
             Request.Builder()
