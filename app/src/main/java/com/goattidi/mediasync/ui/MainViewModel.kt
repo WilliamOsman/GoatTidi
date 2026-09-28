@@ -2,6 +2,7 @@ package com.goattidi.mediasync.ui
 
 import android.app.PendingIntent
 import android.net.Uri
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.goattidi.mediasync.data.db.MediaType
@@ -20,16 +21,21 @@ import com.goattidi.mediasync.sync.ReclaimEngine
 import com.goattidi.mediasync.sync.SyncScheduler
 import com.goattidi.mediasync.sync.VerifyEngine
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -92,6 +98,10 @@ class MainViewModel @Inject constructor(
         /** When the sync-search index was last rebuilt (epoch ms); 0 = never. */
         val lastSyncScanAt: Long = 0,
         val syncScanning: Boolean = false,
+        /** A user-requested gallery refresh (pull-to-refresh) is in flight. */
+        val refreshing: Boolean = false,
+        /** Any MediaStore scan is running, including automatic ones. */
+        val scanning: Boolean = false,
         /** Active work: UPLOADING first, then QUEUED, then FAILED. */
         val queue: List<SyncRecord> = emptyList()
     ) {
@@ -105,6 +115,15 @@ class MainViewModel @Inject constructor(
 
     /** Set once this process has confirmed (or rebuilt) the own-upload ledger. */
     private var ledgerChecked = false
+
+    /**
+     * MediaStore scans, run one at a time. Conflated: however many requests arrive while
+     * a scan runs (camera bursts, pull, returning to the app), one more scan follows it.
+     */
+    private val scanRequests = Channel<Unit>(Channel.CONFLATED)
+
+    /** Set by [refresh]; the next scan to start is the one that clears the pull indicator. */
+    private var userRefreshRequestedAt: Long? = null
 
     private data class Prefs(
         val folderName: String,
@@ -160,13 +179,36 @@ class MainViewModel @Inject constructor(
         Filter.SYNCED -> record.status == SyncStatus.SYNCED
     }
 
+    /** Pull-to-refresh / "Scan again": shows the refresh indicator until the scan lands. */
     fun refresh() {
-        viewModelScope.launch {
-            ui.update { it.copy(busy = true) }
-            runCatching { repository.scanAndReconcile() }
-                .onFailure { e -> ui.update { it.copy(message = "Scan failed: ${e.message}") } }
-            ui.update { it.copy(busy = false) }
+        userRefreshRequestedAt = SystemClock.uptimeMillis()
+        ui.update { it.copy(refreshing = true) }
+        scanRequests.trySend(Unit)
+    }
+
+    /** Automatic rescans (app returns to the foreground, MediaStore changed): no indicator. */
+    fun refreshQuietly() {
+        scanRequests.trySend(Unit)
+    }
+
+    /** Debounced: one camera capture fires several MediaStore notifications. */
+    @OptIn(FlowPreview::class)
+    val mediaChanges: Flow<Unit> = repository.mediaChanges().debounce(MEDIA_CHANGE_DEBOUNCE_MS)
+
+    private suspend fun runScan() {
+        // Only a scan that starts after the pull may end it — not one already running
+        val refreshStartedAt = userRefreshRequestedAt
+        userRefreshRequestedAt = null
+        ui.update { it.copy(scanning = true) }
+        runCatching { repository.scanAndReconcile() }
+            .onFailure { e -> ui.update { it.copy(message = "Scan failed: ${e.message}") } }
+        if (refreshStartedAt != null) {
+            // A scan takes milliseconds; flipping refreshing true→false inside one frame is
+            // never seen by PullToRefreshBox, which then leaves its indicator stuck on screen
+            val shown = SystemClock.uptimeMillis() - refreshStartedAt
+            if (shown < MIN_REFRESH_INDICATOR_MS) delay(MIN_REFRESH_INDICATOR_MS - shown)
         }
+        ui.update { it.copy(scanning = false, refreshing = if (refreshStartedAt != null) false else it.refreshing) }
     }
 
     fun setFilter(filter: Filter) = ui.update { it.copy(filter = filter) }
@@ -488,6 +530,7 @@ class MainViewModel @Inject constructor(
                 }
         }
         viewModelScope.launch { refreshSyncSearchIfStale() }
+        viewModelScope.launch { for (request in scanRequests) runScan() }
     }
 
     fun requestDelete(id: Long) {
@@ -576,5 +619,7 @@ class MainViewModel @Inject constructor(
         /** Picker label for the top of My Drive; as the sync-search folder it means "entire Drive". */
         const val ENTIRE_DRIVE_LABEL = "My Drive"
         const val SYNC_SCAN_MAX_AGE_MS = 24 * 60 * 60 * 1000L
+        const val MEDIA_CHANGE_DEBOUNCE_MS = 1_000L
+        const val MIN_REFRESH_INDICATOR_MS = 600L
     }
 }

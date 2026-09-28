@@ -24,15 +24,18 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,6 +85,7 @@ private fun formatDuration(ms: Long): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GalleryContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
     val context = LocalContext.current
@@ -147,36 +151,46 @@ fun GalleryContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
             TextButton(onClick = { viewModel.selectAllUnsynced() }) { Text("Select unsynced") }
         }
 
-        if (state.records.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (state.totalCount > 0) {
-                    // Media exists; the active filter just has no matches
-                    Text("No ${state.filter.label.lowercase()} files")
-                } else {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("No photos, videos, or audio found on this device")
-                        TextButton(onClick = { viewModel.refresh() }) { Text("Scan again") }
+        PullToRefreshBox(
+            isRefreshing = state.refreshing,
+            onRefresh = { viewModel.refresh() },
+            modifier = Modifier.fillMaxSize()
+        ) {
+            if (state.records.isEmpty()) {
+                // A scrollable container, so pull-to-refresh works on an empty gallery too
+                LazyColumn(Modifier.fillMaxSize()) {
+                    item {
+                        Box(Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) {
+                            when {
+                                // Media exists; the active filter just has no matches
+                                state.totalCount > 0 -> Text("No ${state.filter.label.lowercase()} files")
+                                state.scanning -> Text("Looking for photos, videos, and audio…")
+                                else -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("No photos, videos, or audio found on this device")
+                                    TextButton(onClick = { viewModel.refresh() }) { Text("Scan again") }
+                                }
+                            }
+                        }
                     }
                 }
-            }
-            return@Column
-        }
-
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 100.dp),
-            modifier = Modifier.fillMaxSize(),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            items(state.records, key = { it.mediaStoreId }) { record ->
-                MediaTile(
-                    record = record,
-                    selected = record.mediaStoreId in state.selected,
-                    selectionMode = state.selectionMode,
-                    onToggleSelect = { viewModel.toggleSelect(record.mediaStoreId) },
-                    onShowFailure = { failureDetail = record },
-                    onOpen = { openInViewer(record) }
-                )
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 100.dp),
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    items(state.records, key = { it.mediaStoreId }) { record ->
+                        MediaTile(
+                            record = record,
+                            selected = record.mediaStoreId in state.selected,
+                            selectionMode = state.selectionMode,
+                            onToggleSelect = { viewModel.toggleSelect(record.mediaStoreId) },
+                            onShowFailure = { failureDetail = record },
+                            onOpen = { openInViewer(record) }
+                        )
+                    }
+                }
             }
         }
     }

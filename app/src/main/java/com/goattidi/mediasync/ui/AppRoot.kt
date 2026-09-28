@@ -53,6 +53,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 private fun requiredPermissions(): Array<String> =
@@ -84,7 +87,6 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
     ) { results ->
         // Partial grant (Android 14 "selected photos") still lets us scan the subset
         permissionGranted = results.values.any { it }
-        if (permissionGranted) viewModel.refresh()
     }
 
     val consentLauncher = rememberLauncherForActivityResult(
@@ -98,8 +100,19 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
     }
 
     LaunchedEffect(Unit) {
-        if (permissionGranted) viewModel.refresh()
-        else permissionLauncher.launch(requiredPermissions())
+        if (!permissionGranted) permissionLauncher.launch(requiredPermissions())
+    }
+
+    // Rescan each time the app comes to the foreground (back from the camera, a download)
+    // and, while it stays visible, on every MediaStore change — so new media shows up
+    // without restarting the app. Nothing listens while the app is in the background.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(permissionGranted) {
+        if (!permissionGranted) return@LaunchedEffect
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.refreshQuietly()
+            viewModel.mediaChanges.collect { viewModel.refreshQuietly() }
+        }
     }
 
     LaunchedEffect(state.consentIntent) {
