@@ -302,18 +302,19 @@ class VerifyAndReclaimTest {
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
                 """{"files":[
-                    {"id":"v1","name":"a.mp4","md5Checksum":"c1","size":"1","parents":["ext-root"]},
-                    {"id":"v2","name":"b.mp4","md5Checksum":"c2","size":"1","parents":["deep"]},
-                    {"id":"x1","name":"c.mp4","md5Checksum":"c3","size":"1","parents":["elsewhere"]},
-                    {"id":"x2","name":"d.mp4","md5Checksum":"c6","size":"1","parents":["loopA"]},
+                    {"id":"v1","ownedByMe":true,"name":"a.mp4","md5Checksum":"c1","size":"1","parents":["ext-root"]},
+                    {"id":"v2","ownedByMe":true,"name":"b.mp4","md5Checksum":"c2","size":"1","parents":["deep"]},
+                    {"id":"x1","ownedByMe":true,"name":"c.mp4","md5Checksum":"c3","size":"1","parents":["elsewhere"]},
+                    {"id":"x2","ownedByMe":true,"name":"d.mp4","md5Checksum":"c6","size":"1","parents":["loopA"]},
                     {"id":"own1","name":"e.jpg","md5Checksum":"c4","size":"1","parents":["elsewhere"],"isAppAuthorized":true},
-                    {"id":"doc","name":"notes","parents":["sub1"]}
+                    {"id":"doc","name":"notes","parents":["sub1"]},
+                    {"id":"shared","name":"g.mp4","md5Checksum":"c7","size":"1","parents":["sub1"],"ownedByMe":false}
                 ],"nextPageToken":"p2"}"""
             )
         )
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
-                """{"files":[{"id":"v3","name":"f.mp4","md5Checksum":"c5","size":"1","parents":["sub1"]}]}"""
+                """{"files":[{"id":"v3","ownedByMe":true,"name":"f.mp4","md5Checksum":"c5","size":"1","parents":["sub1"]}]}"""
             )
         )
 
@@ -326,10 +327,11 @@ class VerifyAndReclaimTest {
         }
         assertEquals(null, ledger.getByMd5("c3")) // outside the tree and not the app's own
         assertEquals(null, ledger.getByMd5("c6")) // in a parent loop outside the tree
+        assertEquals(null, ledger.getByMd5("c7")) // in the tree, but someone else's file
         assertEquals(4, server.requestCount) // folder check + one folder listing + two file pages
         server.takeRequest()
         server.takeRequest()
-        assertTrue(server.takeRequest().path!!.contains("parents,isAppAuthorized"))
+        assertTrue(server.takeRequest().path!!.contains("parents,isAppAuthorized,ownedByMe"))
     }
 
     @Test

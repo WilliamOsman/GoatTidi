@@ -99,7 +99,9 @@ class VerifyEngine @Inject constructor(
      * Sync scan for a chosen folder — how uploads from OTHER tools (rclone, Drive web)
      * become known duplicates — together with the app's own uploads, in one pass over
      * Drive. Requires the read-only scope; files outside the folder tree are skipped
-     * unless this app created them.
+     * unless this app created them, and so are files in the tree that other people own
+     * (a shared folder's contributors can delete their copies at any time — the same
+     * rule as the entire-Drive scan).
      *
      * Under drive.readonly, listing the app's own uploads already pages through the
      * whole Drive, so those same pages supply the folder's files. Which files sit in the
@@ -131,7 +133,7 @@ class VerifyEngine @Inject constructor(
             for (file in page.files) {
                 val md5 = file.md5Checksum ?: continue // Docs/Sheets etc. have no checksum
                 val mine = file.isAppAuthorized
-                val inside = file.parents.any(tree::contains)
+                val inside = file.ownedByMe && file.parents.any(tree::contains)
                 if (!mine && !inside) continue
                 repository.recordUploaded(md5, file.id, file.name ?: "", file.size?.toLongOrNull() ?: 0L, now)
                 if (mine) own++

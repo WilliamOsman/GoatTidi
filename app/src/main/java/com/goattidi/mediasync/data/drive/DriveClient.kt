@@ -249,7 +249,7 @@ class DriveClient(
     suspend fun listAllFiles(pageToken: String? = null, pageSize: Int = 1000): DriveFileList =
         listPage(
             "trashed = false and mimeType != '$DRIVE_FOLDER_MIME'",
-            "id,name,md5Checksum,size,parents,isAppAuthorized", pageToken, pageSize
+            "id,name,md5Checksum,size,parents,isAppAuthorized,ownedByMe", pageToken, pageSize
         )
 
     /** Pages through every folder visible to the app — just ids and parents, to map the tree. */
