@@ -80,4 +80,4 @@ The design and its correctness rules are written up in [`docs/mobile-media-sync-
 
 ## License
 
-[MIT](LICENSE)
+The code is [MIT](LICENSE)-licensed. The GoatTidi artwork — the goat icon (`GoatTidi_icon.png` and the launcher images generated from it) — is © 2026 William Osman, all rights reserved, and **not** covered by the MIT License. If you fork or redistribute the app, replace the icon with your own. See [NOTICE](NOTICE) for details.
