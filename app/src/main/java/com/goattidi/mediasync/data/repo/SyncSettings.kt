@@ -1,8 +1,11 @@
 package com.goattidi.mediasync.data.repo
 
 import android.content.Context
+import android.os.Build
+import android.provider.Settings
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -38,7 +41,28 @@ class SyncSettings @Inject constructor(
 
     val wifiOnly: Flow<Boolean> = context.dataStore.data.map { it[keyWifiOnly] ?: true }
     val chargingOnly: Flow<Boolean> = context.dataStore.data.map { it[keyChargingOnly] ?: false }
-    val folderName: Flow<String> = context.dataStore.data.map { it[keyFolderName] ?: DEFAULT_FOLDER_NAME }
+    /**
+     * The destination folder name. Installs that already resolved a folder under the old
+     * default (a cached id but no saved name) keep "Phone Media" — otherwise Settings would
+     * show the new default while uploads kept landing in the old folder.
+     */
+    val folderName: Flow<String> = context.dataStore.data.map {
+        effectiveFolderName(it[keyFolderName], hasCachedFolder = it[keyFolderId] != null, defaultFolderName)
+    }
+
+    /**
+     * "GoatTidi_" plus the phone's name as set in Android settings (e.g. "Galaxy S23"),
+     * falling back to the model, then "mobile" — so several devices get separate folders.
+     */
+    val defaultFolderName: String by lazy {
+        val deviceName = runCatching {
+            Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
+        }.getOrNull()
+        val name = listOf(deviceName, Build.MODEL, "mobile")
+            .firstNotNullOf { it?.trim()?.takeIf(String::isNotEmpty) }
+            .replace('/', '-') // "/" separates path segments in the app's folder display
+        "GoatTidi_$name"
+    }
     val layout: Flow<DriveLayout> = context.dataStore.data.map { prefs ->
         prefs[keyLayout]?.let { runCatching { DriveLayout.valueOf(it) }.getOrNull() } ?: DriveLayout.FLAT
     }
@@ -55,6 +79,30 @@ class SyncSettings @Inject constructor(
 
     /** Drive id of that folder (authoritative — survives renames). Empty = resolve by path. */
     val dedupFolderId: Flow<String> = context.dataStore.data.map { it[keyDedupFolderId] ?: "" }
+
+    private val keyExternalRead = booleanPreferencesKey("external_read_enabled")
+
+    /**
+     * Whether to request drive.readonly on top of drive.file. Opt-in: only the external
+     * duplicate-check folder needs it. Unset on installs from before it was opt-in, which
+     * already held the scope — keep it for anyone who has a duplicate-check folder set.
+     */
+    val externalReadEnabled: Flow<Boolean> = context.dataStore.data.map {
+        it[keyExternalRead] ?: !it[keyDedupFolder].isNullOrBlank()
+    }
+
+    suspend fun setExternalReadEnabled(value: Boolean) {
+        context.dataStore.edit { it[keyExternalRead] = value }
+    }
+
+    private val keyLastSyncScan = longPreferencesKey("sync_search_scanned_at")
+
+    /** When the sync-search folder was last indexed (epoch ms); 0 = never. */
+    val lastSyncScanAt: Flow<Long> = context.dataStore.data.map { it[keyLastSyncScan] ?: 0L }
+
+    suspend fun setLastSyncScanAt(value: Long) {
+        context.dataStore.edit { it[keyLastSyncScan] = value }
+    }
 
     suspend fun setDedupFolder(path: String, id: String = "") {
         context.dataStore.edit {
@@ -81,11 +129,26 @@ class SyncSettings @Inject constructor(
 
     suspend fun cachedFolderId(): String? = context.dataStore.data.first()[keyFolderId]
 
-    suspend fun setCachedFolderId(id: String) {
-        context.dataStore.edit { it[keyFolderId] = id }
+    /**
+     * Caches the resolved destination folder id. With [folderName], the name it was resolved
+     * under is saved too, so a device-derived default can't later read as the legacy one.
+     */
+    suspend fun setCachedFolderId(id: String, folderName: String? = null) {
+        context.dataStore.edit {
+            it[keyFolderId] = id
+            if (folderName != null) it[keyFolderName] = folderName
+        }
+    }
+
+    suspend fun clearCachedFolderId() {
+        context.dataStore.edit { it.remove(keyFolderId) }
     }
 
     companion object {
-        const val DEFAULT_FOLDER_NAME = "Phone Media"
+        const val LEGACY_DEFAULT_FOLDER_NAME = "Phone Media"
+
+        /** A cached folder id without a saved name can only come from an install on the old default. */
+        internal fun effectiveFolderName(saved: String?, hasCachedFolder: Boolean, deviceDefault: String): String =
+            saved ?: if (hasCachedFolder) LEGACY_DEFAULT_FOLDER_NAME else deviceDefault
     }
 }

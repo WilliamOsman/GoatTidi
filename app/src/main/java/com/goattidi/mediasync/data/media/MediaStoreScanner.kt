@@ -2,9 +2,15 @@ package com.goattidi.mediasync.data.media
 
 import android.content.ContentResolver
 import android.content.ContentUris
+import android.database.ContentObserver
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import com.goattidi.mediasync.data.db.MediaType
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import javax.inject.Inject
 
 /** A media file as reported by MediaStore during a scan. */
@@ -44,6 +50,21 @@ class MediaStoreScanner @Inject constructor(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, MediaType.AUDIO,
             hasDateTaken = false, durationColumn = MediaStore.Audio.AudioColumns.DURATION
         )
+
+    /**
+     * Emits whenever MediaStore reports a change in any collection [scanAll] reads — a new
+     * photo from the camera, a download, a deletion. Callers should debounce: a single
+     * capture can fire several notifications.
+     */
+    fun changes(): Flow<Unit> = callbackFlow {
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                trySend(Unit)
+            }
+        }
+        COLLECTIONS.forEach { contentResolver.registerContentObserver(it, true, observer) }
+        awaitClose { contentResolver.unregisterContentObserver(observer) }
+    }
 
     private fun scan(
         collection: Uri,
@@ -92,5 +113,13 @@ class MediaStoreScanner @Inject constructor(
             }
         }
         return results
+    }
+
+    private companion object {
+        val COLLECTIONS = listOf(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        )
     }
 }

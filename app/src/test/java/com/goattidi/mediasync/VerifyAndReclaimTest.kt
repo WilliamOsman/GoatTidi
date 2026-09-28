@@ -241,14 +241,14 @@ class VerifyAndReclaimTest {
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
                 """{"files":[
-                    {"id":"f1","name":"a.mp4","md5Checksum":"aaaa","size":"100"},
-                    {"id":"f2","name":"doc-no-checksum"}
+                    {"id":"f1","name":"a.mp4","md5Checksum":"aaaa","size":"100","isAppAuthorized":true},
+                    {"id":"f2","name":"doc-no-checksum","isAppAuthorized":true}
                 ],"nextPageToken":"page2"}"""
             )
         )
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
-                """{"files":[{"id":"f3","name":"b.jpg","md5Checksum":"BBBB","size":"200"}]}"""
+                """{"files":[{"id":"f3","name":"b.jpg","md5Checksum":"BBBB","size":"200","isAppAuthorized":true}]}"""
             )
         )
 
@@ -263,73 +263,122 @@ class VerifyAndReclaimTest {
     }
 
     @Test
-    fun `external folder import walks subfolders and indexes checksums`() = runTest {
-        // resolve path "Media" → root folder id
-        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"files":[{"id":"ext-root"}]}"""))
-        // children of ext-root: one video + one subfolder
+    fun `ledger import skips files the app didn't create when drive_readonly is granted`() = runTest {
+        // With the opt-in read scope the listing spans the whole Drive; only the app's
+        // own uploads belong in the ledger — never the user's other files
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
                 """{"files":[
-                    {"id":"v1","name":"clip.mp4","md5Checksum":"cccc","size":"500"},
-                    {"id":"sub1","name":"2024","mimeType":"application/vnd.google-apps.folder"}
+                    {"id":"mine","name":"a.mp4","md5Checksum":"aaaa","size":"100","isAppAuthorized":true},
+                    {"id":"theirs","name":"b.jpg","md5Checksum":"cccc","size":"200","isAppAuthorized":false}
                 ]}"""
             )
         )
-        // children of sub1: one more video
-        server.enqueue(
-            MockResponse().setResponseCode(200).setBody(
-                """{"files":[{"id":"v2","name":"old.mp4","md5Checksum":"dddd","size":"900"}]}"""
-            )
-        )
 
-        val imported = VerifyEngine(repo, client).importExternalFolder("Media", policy)
+        val imported = VerifyEngine(repo, client).importLedgerFromDrive(policy)
 
-        assertEquals(2, imported)
-        assertEquals("v1", db.uploadedContentDao().getByMd5("cccc")!!.driveFileId)
-        assertEquals("v2", db.uploadedContentDao().getByMd5("dddd")!!.driveFileId)
-        assertEquals(3, server.requestCount)
-    }
-
-    @Test
-    fun `external folder import by id validates the folder then walks it`() = runTest {
-        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"id":"ext-root","trashed":false}"""))
-        server.enqueue(
-            MockResponse().setResponseCode(200).setBody(
-                """{"files":[{"id":"v1","name":"clip.mp4","md5Checksum":"eeee","size":"500"}]}"""
-            )
-        )
-
-        val imported = VerifyEngine(repo, client).importExternalFolderById("ext-root", policy)
-
-        assertEquals(2, server.requestCount)
         assertEquals(1, imported)
-        assertEquals("v1", db.uploadedContentDao().getByMd5("eeee")!!.driveFileId)
+        assertEquals("mine", db.uploadedContentDao().getByMd5("aaaa")!!.driveFileId)
+        assertEquals(null, db.uploadedContentDao().getByMd5("cccc"))
     }
 
     @Test
-    fun `external folder import by id returns null when folder was deleted`() = runTest {
+    fun `folder sync scan indexes the tree and the app's own uploads in one pass`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"id":"ext-root","trashed":false}"""))
+        // Every folder in Drive, once: the chosen tree (ext-root > sub1 > deep), an unrelated
+        // folder, and a parent loop that must not hang the membership check
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[
+                    {"id":"ext-root","parents":["my-drive"]},
+                    {"id":"sub1","parents":["ext-root"]},
+                    {"id":"deep","parents":["sub1"]},
+                    {"id":"elsewhere","parents":["my-drive"]},
+                    {"id":"loopA","parents":["loopB"]},
+                    {"id":"loopB","parents":["loopA"]}
+                ]}"""
+            )
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[
+                    {"id":"v1","name":"a.mp4","md5Checksum":"c1","size":"1","parents":["ext-root"]},
+                    {"id":"v2","name":"b.mp4","md5Checksum":"c2","size":"1","parents":["deep"]},
+                    {"id":"x1","name":"c.mp4","md5Checksum":"c3","size":"1","parents":["elsewhere"]},
+                    {"id":"x2","name":"d.mp4","md5Checksum":"c6","size":"1","parents":["loopA"]},
+                    {"id":"own1","name":"e.jpg","md5Checksum":"c4","size":"1","parents":["elsewhere"],"isAppAuthorized":true},
+                    {"id":"doc","name":"notes","parents":["sub1"]}
+                ],"nextPageToken":"p2"}"""
+            )
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[{"id":"v3","name":"f.mp4","md5Checksum":"c5","size":"1","parents":["sub1"]}]}"""
+            )
+        )
+
+        val result = VerifyEngine(repo, client).scanOwnUploadsAndFolder("ext-root", policy)
+
+        assertEquals(VerifyEngine.SyncScanResult(own = 1, inFolder = 3), result)
+        val ledger = db.uploadedContentDao()
+        listOf("c1" to "v1", "c2" to "v2", "c5" to "v3", "c4" to "own1").forEach { (md5, id) ->
+            assertEquals(id, ledger.getByMd5(md5)!!.driveFileId)
+        }
+        assertEquals(null, ledger.getByMd5("c3")) // outside the tree and not the app's own
+        assertEquals(null, ledger.getByMd5("c6")) // in a parent loop outside the tree
+        assertEquals(4, server.requestCount) // folder check + one folder listing + two file pages
+        server.takeRequest()
+        server.takeRequest()
+        assertTrue(server.takeRequest().path!!.contains("parents,isAppAuthorized"))
+    }
+
+    @Test
+    fun `folder sync scan of a deleted folder still rebuilds the own-upload ledger`() = runTest {
         server.enqueue(MockResponse().setResponseCode(404))
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[{"id":"own1","name":"e.jpg","md5Checksum":"c4","size":"1","isAppAuthorized":true}]}"""
+            )
+        )
 
-        assertEquals(null, VerifyEngine(repo, client).importExternalFolderById("gone", policy))
+        val result = VerifyEngine(repo, client).scanOwnUploadsAndFolder("gone", policy)
+
+        assertEquals(VerifyEngine.SyncScanResult(own = 1, inFolder = null), result)
+        assertEquals("own1", db.uploadedContentDao().getByMd5("c4")!!.driveFileId)
     }
 
     @Test
-    fun `external folder import returns null when path does not exist`() = runTest {
-        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"files":[]}"""))
+    fun `entire-Drive sync search lists the user's own files flat instead of walking folders`() = runTest {
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[
+                    {"id":"d1","name":"a.jpg","md5Checksum":"1111","size":"10"},
+                    {"id":"d2","name":"a-doc"}
+                ],"nextPageToken":"p2"}"""
+            )
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[{"id":"d3","name":"b.mp4","md5Checksum":"2222","size":"20"}]}"""
+            )
+        )
 
-        val imported = VerifyEngine(repo, client).importExternalFolder("No/Such/Folder", policy)
+        val imported = VerifyEngine(repo, client).importEntireDrive(policy)
 
-        assertEquals(null, imported)
-        assertEquals(1, server.requestCount) // stops at the first missing segment
+        assertEquals(2, imported) // the checksum-less Doc is skipped
+        assertEquals("d1", db.uploadedContentDao().getByMd5("1111")!!.driveFileId)
+        assertEquals("d3", db.uploadedContentDao().getByMd5("2222")!!.driveFileId)
+        assertEquals(2, server.requestCount) // no folder validation, no per-folder walk
+        val first = java.net.URLDecoder.decode(server.takeRequest().path!!, "UTF-8")
+        assertTrue(first.contains("'me' in owners")) // files merely shared with the user are excluded
+        assertTrue(server.takeRequest().path!!.contains("pageToken=p2"))
     }
-
-    // ---- ensureFolder ----
 
     @Test
     fun `ensureFolder returns existing folder id`() = runTest {
         server.enqueue(
             MockResponse().setResponseCode(200)
-                .setBody("""{"files":[{"id":"folder-existing","name":"Phone Media"}]}""")
+                .setBody("""{"files":[{"id":"folder-existing","name":"Phone Media","isAppAuthorized":true}]}""")
         )
 
         val id = client.ensureFolder("Phone Media")
@@ -338,6 +387,23 @@ class VerifyAndReclaimTest {
         assertEquals(1, server.requestCount)
         val req = server.takeRequest()
         assertTrue(req.path!!.contains("q="))
+    }
+
+    @Test
+    fun `ensureFolder never adopts a same-named folder the app didn't create`() = runTest {
+        // Visible through drive.readonly, but drive.file can't upload into it
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .setBody("""{"files":[{"id":"users-own","name":"Phone Media","isAppAuthorized":false}]}""")
+        )
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"id":"folder-new"}"""))
+
+        val id = client.ensureFolder("Phone Media")
+
+        assertEquals("folder-new", id)
+        val lookup = server.takeRequest()
+        assertTrue(lookup.path!!.contains("isAppAuthorized"))
+        assertEquals("POST", server.takeRequest().method)
     }
 
     @Test

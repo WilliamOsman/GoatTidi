@@ -22,6 +22,9 @@ class SyncStateRepository @Inject constructor(
 
     suspend fun scanAndReconcile() = reconcile(scanner.scanAll())
 
+    /** Fires when photos, videos, or audio are added, edited, or deleted on the device. */
+    fun mediaChanges(): Flow<Unit> = scanner.changes()
+
     /**
      * Merges a MediaStore scan into the DB. New files become NOT_UPLOADED; for known
      * files, a size or date_modified change invalidates the cached MD5 (invariant #2)
@@ -33,9 +36,12 @@ class SyncStateRepository @Inject constructor(
         // (the gallery mirrors what's on the phone; Drive copies are unaffected)
         val gone = existing.keys - scanned.map { it.mediaStoreId }.toSet()
         if (gone.isNotEmpty()) dao.deleteByIds(gone.toList())
-        val upserts = scanned.map { s ->
+        // Write only rows MediaStore actually changed. Rewriting every row from the snapshot
+        // above would clobber status changes the upload worker made in the meantime — and
+        // scans run on every media change while the app is open.
+        val upserts = scanned.mapNotNull { s ->
             val prev = existing[s.mediaStoreId]
-            if (prev == null) newRecord(s) else merge(prev, s)
+            if (prev == null) newRecord(s) else merge(prev, s).takeIf { it != prev }
         }
         if (upserts.isNotEmpty()) dao.upsert(upserts)
     }
@@ -95,6 +101,9 @@ class SyncStateRepository @Inject constructor(
     suspend fun lookupUploaded(md5: String): UploadedContent? = uploadedDao.getByMd5(md5.lowercase())
 
     suspend fun forgetUploaded(md5: String) = uploadedDao.deleteByMd5(md5.lowercase())
+
+    /** Empty after a fresh install or cleared app data — the ledger must be rebuilt from Drive. */
+    suspend fun ledgerIsEmpty(): Boolean = uploadedDao.count() == 0
 
     suspend fun recordUploaded(md5: String, driveFileId: String, fileName: String, sizeBytes: Long, uploadedAt: Long) =
         uploadedDao.upsert(UploadedContent(md5.lowercase(), driveFileId, fileName, sizeBytes, uploadedAt))

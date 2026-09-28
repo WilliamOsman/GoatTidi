@@ -6,6 +6,8 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.goattidi.mediasync.data.db.AppDatabase
 import com.goattidi.mediasync.data.db.MediaType
+import com.goattidi.mediasync.data.db.SyncRecord
+import com.goattidi.mediasync.data.db.SyncRecordDao
 import com.goattidi.mediasync.data.db.SyncStatus
 import com.goattidi.mediasync.data.media.MediaStoreScanner
 import com.goattidi.mediasync.data.media.ScannedMedia
@@ -27,6 +29,7 @@ class SyncStateRepositoryTest {
 
     private lateinit var db: AppDatabase
     private lateinit var repo: SyncStateRepository
+    private lateinit var scanner: MediaStoreScanner
 
     @Before
     fun setUp() {
@@ -34,7 +37,8 @@ class SyncStateRepositoryTest {
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        repo = SyncStateRepository(db.syncRecordDao(), db.uploadedContentDao(), MediaStoreScanner(context.contentResolver))
+        scanner = MediaStoreScanner(context.contentResolver)
+        repo = SyncStateRepository(db.syncRecordDao(), db.uploadedContentDao(), scanner)
     }
 
     @After
@@ -78,6 +82,32 @@ class SyncStateRepositoryTest {
         val record = db.syncRecordDao().getById(1L)!!
         assertEquals("abc123", record.localMd5)
         assertEquals(SyncStatus.NOT_UPLOADED, record.status)
+    }
+
+    @Test
+    fun `rescan writes only rows MediaStore changed`() = runTest {
+        // Scans now run on every media change, possibly mid-upload: rewriting unchanged
+        // rows from the scan's snapshot would clobber the worker's status updates
+        val counting = CountingDao(db.syncRecordDao())
+        val repo = SyncStateRepository(counting, db.uploadedContentDao(), scanner)
+        repo.reconcile(listOf(scannedItem(id = 1), scannedItem(id = 2)))
+        assertEquals(2, counting.rowsWritten)
+
+        repo.reconcile(listOf(scannedItem(id = 1), scannedItem(id = 2)))
+        assertEquals(2, counting.rowsWritten) // nothing changed → nothing written
+
+        repo.reconcile(listOf(scannedItem(id = 1), scannedItem(id = 2, size = 2_000L), scannedItem(id = 3)))
+        assertEquals(4, counting.rowsWritten) // the edited file and the new one
+    }
+
+    private class CountingDao(private val delegate: SyncRecordDao) : SyncRecordDao by delegate {
+        var rowsWritten = 0
+            private set
+
+        override suspend fun upsert(records: List<SyncRecord>) {
+            rowsWritten += records.size
+            delegate.upsert(records)
+        }
     }
 
     @Test

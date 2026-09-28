@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import androidx.activity.compose.BackHandler
@@ -16,7 +17,21 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -25,17 +40,22 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 private fun requiredPermissions(): Array<String> =
@@ -67,7 +87,6 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
     ) { results ->
         // Partial grant (Android 14 "selected photos") still lets us scan the subset
         permissionGranted = results.values.any { it }
-        if (permissionGranted) viewModel.refresh()
     }
 
     val consentLauncher = rememberLauncherForActivityResult(
@@ -81,8 +100,19 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
     }
 
     LaunchedEffect(Unit) {
-        if (permissionGranted) viewModel.refresh()
-        else permissionLauncher.launch(requiredPermissions())
+        if (!permissionGranted) permissionLauncher.launch(requiredPermissions())
+    }
+
+    // Rescan each time the app comes to the foreground (back from the camera, a download)
+    // and, while it stays visible, on every MediaStore change — so new media shows up
+    // without restarting the app. Nothing listens while the app is in the background.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(permissionGranted) {
+        if (!permissionGranted) return@LaunchedEffect
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.refreshQuietly()
+            viewModel.mediaChanges.collect { viewModel.refreshQuietly() }
+        }
     }
 
     LaunchedEffect(state.consentIntent) {
@@ -91,6 +121,8 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
         }
     }
 
+    var pendingLegacyDelete by remember { mutableStateOf<List<Uri>>(emptyList()) }
+
     LaunchedEffect(Unit) {
         viewModel.deleteRequests.collect { uris ->
             if (Build.VERSION.SDK_INT >= 30) {
@@ -98,10 +130,21 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
                 val pi = MediaStore.createDeleteRequest(context.contentResolver, uris)
                 deleteLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
             } else {
-                uris.forEach { runCatching { context.contentResolver.delete(it, null, null) } }
-                viewModel.onDeleteCompleted()
+                pendingLegacyDelete = uris
             }
         }
+    }
+
+    if (pendingLegacyDelete.isNotEmpty()) {
+        LegacyDeleteConfirm(
+            count = pendingLegacyDelete.size,
+            onConfirm = {
+                pendingLegacyDelete.forEach { runCatching { context.contentResolver.delete(it, null, null) } }
+                pendingLegacyDelete = emptyList()
+                viewModel.onDeleteCompleted()
+            },
+            onDismiss = { pendingLegacyDelete = emptyList() }
+        )
     }
 
     LaunchedEffect(state.message) {
@@ -115,36 +158,68 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
+            Box(Modifier.fillMaxWidth()) {
+                TopAppBar(
+                    navigationIcon = {
                         when {
-                            state.screen == Screen.RECLAIM -> "Free up space"
-                            state.screen == Screen.SETTINGS -> "Settings"
-                            state.screen == Screen.QUEUE -> "Upload queue"
-                            state.selectionMode -> "${state.selected.size} selected"
-                            else -> "GoatTidi · ${state.syncedCount}/${state.totalCount} synced"
-                        },
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                },
-                actions = {
-                    when {
-                        state.screen != Screen.GALLERY ->
-                            TextButton(onClick = { viewModel.openGallery() }) { Text("Gallery") }
-                        state.selectionMode -> {
-                            TextButton(onClick = { viewModel.syncSelected() }) { Text("Upload") }
-                            TextButton(onClick = { viewModel.clearSelection() }) { Text("Clear") }
+                            state.screen != Screen.GALLERY ->
+                                TextButton(onClick = { viewModel.openGallery() }) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Gallery")
+                                }
+                            state.selectionMode ->
+                                IconButton(onClick = { viewModel.clearSelection() }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Clear selection")
+                                }
                         }
-                        else -> {
-                            TextButton(onClick = { viewModel.verify() }) { Text("Verify") }
-                            TextButton(onClick = { viewModel.openReclaim() }) { Text("Free space") }
-                            TextButton(onClick = { viewModel.connectDrive() }) { Text("Drive") }
-                            TextButton(onClick = { viewModel.openSettings() }) { Text("⚙") }
+                    },
+                    title = {
+                        when {
+                            state.screen == Screen.RECLAIM -> Text("Free up space")
+                            state.screen == Screen.SETTINGS -> Text("Settings")
+                            state.screen == Screen.QUEUE -> Text("Upload queue")
+                            state.selectionMode -> Text("${state.selected.size} selected")
+                            else -> Column {
+                                Text("GoatTidi", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    if (state.uploadSelectedCount == 0) "None selected"
+                                    else "${state.syncedCount}/${state.uploadSelectedCount} synced",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    },
+                    actions = {
+                        when {
+                            state.screen == Screen.RECLAIM ->
+                                OverflowMenu(listOf("Verify with Drive" to viewModel::verify))
+                            state.screen != Screen.GALLERY -> {}
+                            state.selectionMode ->
+                                TextButton(onClick = { viewModel.syncSelected() }) { Text("Upload") }
+                            else ->
+                                IconButton(onClick = { viewModel.openSettings() }) {
+                                    Icon(Icons.Default.Settings, contentDescription = "Settings")
+                                }
                         }
                     }
+                )
+                if (state.screen == Screen.GALLERY && !state.selectionMode) {
+                    // Overlaid rather than in the title slot so it sits at the true screen center,
+                    // independent of the title and action widths
+                    TextButton(
+                        onClick = { viewModel.openReclaim() },
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .windowInsetsPadding(TopAppBarDefaults.windowInsets)
+                    ) { Text("Free up space") }
                 }
-            )
+            }
         },
         snackbarHost = { SnackbarHost(snackbar) }
     ) { padding ->
@@ -159,6 +234,42 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
             }
         }
     }
+}
+
+@Composable
+private fun OverflowMenu(items: List<Pair<String, () -> Unit>>) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Default.MoreVert, contentDescription = "More options")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            items.forEach { (label, action) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        expanded = false
+                        action()
+                    }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Below Android 11 there is no system delete dialog — contentResolver.delete is
+ * immediate — so the confirmation §4.5 requires has to come from the app.
+ */
+@Composable
+private fun LegacyDeleteConfirm(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (count == 1) "Delete 1 file from this phone?" else "Delete $count files from this phone?") },
+        text = { Text("The local copies are removed. The verified copies on Google Drive are kept.") },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Delete") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable

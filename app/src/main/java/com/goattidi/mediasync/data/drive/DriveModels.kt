@@ -5,6 +5,9 @@ import java.io.IOException
 
 const val DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 
+/** Drive's alias for the top of My Drive; as the sync-search folder it means "entire Drive". */
+const val DRIVE_ROOT_ID = "root"
+
 @Serializable
 data class DriveFile(
     val id: String,
@@ -12,10 +15,21 @@ data class DriveFile(
     val md5Checksum: String? = null,
     val size: String? = null,
     val mimeType: String? = null,
-    val trashed: Boolean = false
+    val trashed: Boolean = false,
+    /** True when this app created (or was granted) the file; only sent when requested in `fields`. */
+    val isAppAuthorized: Boolean = false,
+    /** Containing folder ids; only sent when requested in `fields`. */
+    val parents: List<String> = emptyList()
 ) {
     val isFolder: Boolean get() = mimeType == DRIVE_FOLDER_MIME
 }
+
+/** The signed-in Drive user, from about.get. */
+@Serializable
+data class DriveUser(val emailAddress: String? = null, val displayName: String? = null)
+
+@Serializable
+data class DriveAbout(val user: DriveUser? = null)
 
 @Serializable
 data class DriveFileList(

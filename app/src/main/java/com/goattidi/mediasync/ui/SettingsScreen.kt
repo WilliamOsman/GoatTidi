@@ -1,5 +1,6 @@
 package com.goattidi.mediasync.ui
 
+import android.text.format.DateUtils
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,6 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -29,8 +32,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.style.TextOverflow
+import com.goattidi.mediasync.data.db.SyncStatus
 import com.goattidi.mediasync.data.repo.DriveLayout
 
 private fun layoutLabel(layout: DriveLayout): String = when (layout) {
@@ -39,30 +45,80 @@ private fun layoutLabel(layout: DriveLayout): String = when (layout) {
     DriveLayout.MIRROR_LOCAL -> "By source folder (Camera, WhatsApp…)"
 }
 
+/** Names the folders sync detection covers, so the text changes with the toggle and folder. */
+private fun syncDetectionDescription(state: MainViewModel.UiState): String {
+    val base = "Files this app uploaded stay synced even if you move them out of ${state.folderName}/."
+    return when {
+        state.dedupFolder.isBlank() -> base
+        state.syncSearchEntireDrive ->
+            "$base Files already anywhere in your Drive are recognized too, so they aren't uploaded twice."
+        else -> "$base Files already in ${state.dedupFolder}/ are recognized too, so they aren't uploaded twice."
+    }
+}
+
+private fun syncScanStatus(state: MainViewModel.UiState): String = when {
+    state.syncScanning -> "Scanning…"
+    state.lastSyncScanAt == 0L -> "Not scanned yet"
+    System.currentTimeMillis() - state.lastSyncScanAt < DateUtils.MINUTE_IN_MILLIS -> "Last scanned just now"
+    else -> "Last scanned " + DateUtils.getRelativeTimeSpanString(
+        state.lastSyncScanAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS
+    ).toString().replaceFirstChar { it.lowercase() }
+}
+
 @Composable
 fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
     var folderName by remember(state.folderName) { mutableStateOf(state.folderName) }
+    val focusManager = LocalFocusManager.current
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Google Drive destination", style = MaterialTheme.typography.titleMedium)
-        OutlinedTextField(
-            value = folderName,
-            onValueChange = { folderName = it },
-            label = { Text("Folder name") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        TextButton(
-            onClick = { viewModel.saveFolderName(folderName) },
-            enabled = folderName.isNotBlank() && folderName.trim() != state.folderName
-        ) { Text("Save folder name") }
+        Text("Google Drive account", style = MaterialTheme.typography.titleMedium)
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                when (state.driveConnected) {
+                    null -> "Checking…"
+                    true -> state.driveAccountEmail?.let { "✓ Connected as $it" } ?: "✓ Connected"
+                    false -> "Not connected — uploads wait until you connect"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = when (state.driveConnected) {
+                    true -> statusColor(SyncStatus.SYNCED)
+                    false -> MaterialTheme.colorScheme.error
+                    null -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.weight(1f)
+            )
+            if (state.driveConnected == false) {
+                TextButton(onClick = { viewModel.connectDrive() }) { Text("Connect Google Drive") }
+            }
+        }
 
         HorizontalDivider()
 
-        Text("Layout inside the folder", style = MaterialTheme.typography.titleMedium)
+        Text("Google Drive destination", style = MaterialTheme.typography.titleMedium)
+        // Save lives inside the field and appears only once the name actually changes
+        val folderNameChanged = folderName.isNotBlank() && folderName.trim() != state.folderName
+        OutlinedTextField(
+            value = folderName,
+            onValueChange = { folderName = it },
+            label = { Text("New Folder Name") },
+            singleLine = true,
+            trailingIcon = if (folderNameChanged) {
+                { TextButton(onClick = { viewModel.saveFolderName(folderName) }) { Text("Save") } }
+            } else null,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = {
+                if (folderNameChanged) viewModel.saveFolderName(folderName)
+                focusManager.clearFocus()
+            }),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        HorizontalDivider()
+
+        Text("Layout inside ${state.folderName}/", style = MaterialTheme.typography.titleMedium)
         DriveLayout.entries.forEach { layout ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -101,27 +157,37 @@ fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
 
         HorizontalDivider()
 
-        Text("Duplicate detection", style = MaterialTheme.typography.titleMedium)
-        Text(
-            if (state.dedupFolder.isBlank()) "No Drive folder selected"
-            else "Also checking: ${state.dedupFolder}",
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Row {
-            TextButton(onClick = { viewModel.openFolderPicker() }) { Text("Choose Drive folder…") }
-            if (state.dedupFolder.isNotBlank()) {
-                TextButton(onClick = { viewModel.clearDedupFolder() }) { Text("Clear") }
+        Text("Sync Settings", style = MaterialTheme.typography.titleMedium)
+        Text(syncDetectionDescription(state), style = MaterialTheme.typography.bodyMedium)
+        val expanded = state.dedupFolder.isNotBlank()
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) {
+                Text("Expand sync search to other folders")
+                Text(
+                    "Avoid duplicate uploads by finding files already on your Drive. " +
+                        "Asks Google for read-only access to your Drive.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = expanded, onCheckedChange = { viewModel.setSyncSearchExpanded(it) })
+        }
+        if (expanded) {
+            TextButton(onClick = { viewModel.openFolderPicker() }) {
+                Text(if (state.syncSearchEntireDrive) "Choose Drive folder…" else "Change Drive folder…")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    syncScanStatus(state),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { viewModel.rescanNow() }, enabled = !state.syncScanning) {
+                    Text("Rescan now")
+                }
             }
         }
-        TextButton(onClick = { viewModel.relinkFromDrive() }) { Text("Rebuild duplicate index") }
-        Text(
-            "Rebuild scans this app's own uploads (any folder) plus the folder tree above — " +
-                "including files uploaded by other tools — and indexes their checksums. " +
-                "Anything whose exact bytes are already on Drive is marked synced instead of " +
-                "re-uploaded. The app reads only the tree you name here, nothing else.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
 
         HorizontalDivider()
 

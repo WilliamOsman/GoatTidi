@@ -34,4 +34,7 @@ interface UploadedContentDao {
 
     @Query("DELETE FROM uploaded_content WHERE md5 = :md5")
     suspend fun deleteByMd5(md5: String)
+
+    @Query("SELECT COUNT(*) FROM uploaded_content")
+    suspend fun count(): Int
 }

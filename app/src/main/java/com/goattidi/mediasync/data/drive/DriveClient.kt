@@ -146,20 +146,34 @@ class DriveClient(
             }
         }
 
-    /** Finds a folder by name (optionally under a parent). Never creates. */
-    suspend fun findFolder(name: String, parentId: String? = null): String? {
+    /**
+     * Finds any folder by name (optionally under a parent) — including the user's own
+     * folders, since drive.readonly is granted for the duplicate index. Never creates.
+     */
+    suspend fun findFolder(name: String, parentId: String? = null): String? =
+        searchFolders(name, parentId).firstOrNull()?.id
+
+    /**
+     * Like [findFolder], but only matches folders this app created. Destination lookups
+     * must use this: a same-named folder of the user's is visible via drive.readonly, but
+     * drive.file gives no write access to it, so every upload into it would fail.
+     */
+    suspend fun findOwnFolder(name: String, parentId: String? = null): String? =
+        searchFolders(name, parentId).firstOrNull { it.isAppAuthorized }?.id
+
+    private suspend fun searchFolders(name: String, parentId: String?): List<DriveFile> {
         val escaped = name.replace("\\", "\\\\").replace("'", "\\'")
         var query = "name = '$escaped' and mimeType = '$DRIVE_FOLDER_MIME' and trashed = false"
         if (parentId != null) query += " and '$parentId' in parents"
         val encoded = java.net.URLEncoder.encode(query, "UTF-8")
         return send { token ->
             Request.Builder()
-                .url("$base/drive/v3/files?q=$encoded&fields=files(id,name)&spaces=drive")
+                .url("$base/drive/v3/files?q=$encoded&fields=files(id,name,isAppAuthorized)&pageSize=1000&spaces=drive")
                 .get()
                 .header("Authorization", "Bearer $token")
                 .build()
         }.use { resp ->
-            json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty()).files.firstOrNull()?.id
+            json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty()).files
         }
     }
 
@@ -174,9 +188,12 @@ class DriveClient(
         return parent
     }
 
-    /** Finds-or-creates the app's destination folder. Returns its Drive file id. */
+    /**
+     * Finds-or-creates the app's destination folder. Returns its Drive file id. Only ever
+     * reuses a folder this app created — never a same-named folder of the user's.
+     */
     suspend fun ensureFolder(name: String, parentId: String? = null): String {
-        findFolder(name, parentId)?.let { return it }
+        findOwnFolder(name, parentId)?.let { return it }
         val metadata = buildJsonObject {
             put("name", name)
             put("mimeType", DRIVE_FOLDER_MIME)
@@ -213,11 +230,36 @@ class DriveClient(
         return results
     }
 
-    /** Lists the direct children of a folder (files and subfolders). */
-    suspend fun listChildren(folderId: String, pageToken: String? = null, pageSize: Int = 1000): DriveFileList {
-        val q = java.net.URLEncoder.encode("'$folderId' in parents and trashed = false", "UTF-8")
+    /**
+     * Pages through the non-folder files this app created — wherever the user has since
+     * moved them within Drive. Under drive.file alone that's everything visible; once the
+     * user opts into drive.readonly the whole Drive is visible, so the app's own files are
+     * picked out by isAppAuthorized (Drive can't filter on it server-side).
+     */
+    suspend fun listFiles(pageToken: String? = null, pageSize: Int = 1000): DriveFileList {
+        val page = listAllFiles(pageToken, pageSize)
+        return page.copy(files = page.files.filter { it.isAppAuthorized })
+    }
+
+    /**
+     * Pages through every non-folder file visible to the app, with parents and
+     * isAppAuthorized — one listing that serves both the app's own uploads and a sync
+     * folder's files (see VerifyEngine.scanOwnUploadsAndFolder).
+     */
+    suspend fun listAllFiles(pageToken: String? = null, pageSize: Int = 1000): DriveFileList =
+        listPage(
+            "trashed = false and mimeType != '$DRIVE_FOLDER_MIME'",
+            "id,name,md5Checksum,size,parents,isAppAuthorized", pageToken, pageSize
+        )
+
+    /** Pages through every folder visible to the app — just ids and parents, to map the tree. */
+    suspend fun listAllFolders(pageToken: String? = null, pageSize: Int = 1000): DriveFileList =
+        listPage("mimeType = '$DRIVE_FOLDER_MIME' and trashed = false", "id,parents", pageToken, pageSize)
+
+    private suspend fun listPage(query: String, fileFields: String, pageToken: String?, pageSize: Int): DriveFileList {
+        val q = java.net.URLEncoder.encode(query, "UTF-8")
         var url = "$base/drive/v3/files?q=$q" +
-            "&fields=nextPageToken,files(id,name,md5Checksum,size,mimeType)&pageSize=$pageSize&spaces=drive"
+            "&fields=nextPageToken,files($fileFields)&pageSize=$pageSize&spaces=drive"
         if (pageToken != null) url += "&pageToken=$pageToken"
         return send { token ->
             Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
@@ -227,21 +269,30 @@ class DriveClient(
     }
 
     /**
-     * Pages through every non-folder file visible to the app. Under the drive.file
-     * scope that is exactly the set of files this app created — wherever the user
-     * has since moved them within Drive.
+     * Pages through every non-folder file the user owns (needs drive.readonly) — the
+     * "entire Drive" sync search. One flat listing instead of a folder-by-folder walk.
+     * Files merely shared with the user are left out: their owner can delete them.
      */
-    suspend fun listFiles(pageToken: String? = null, pageSize: Int = 1000): DriveFileList {
-        val q = java.net.URLEncoder.encode("trashed = false and mimeType != '$DRIVE_FOLDER_MIME'", "UTF-8")
-        var url = "$base/drive/v3/files?q=$q" +
-            "&fields=nextPageToken,files(id,name,md5Checksum,size)&pageSize=$pageSize&spaces=drive"
-        if (pageToken != null) url += "&pageToken=$pageToken"
-        return send { token ->
-            Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
+    suspend fun listOwnedFiles(pageToken: String? = null, pageSize: Int = 1000): DriveFileList =
+        listPage(
+            "trashed = false and mimeType != '$DRIVE_FOLDER_MIME' and 'me' in owners",
+            "id,name,md5Checksum,size", pageToken, pageSize
+        )
+
+    /**
+     * The account the app is connected as. about.get works under drive.file alone, so
+     * showing the email needs no extra scope or consent.
+     */
+    suspend fun getUser(): DriveUser =
+        send { token ->
+            Request.Builder()
+                .url("$base/drive/v3/about?fields=user(emailAddress,displayName)")
+                .get()
+                .header("Authorization", "Bearer $token")
+                .build()
         }.use { resp ->
-            json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty())
+            json.decodeFromString(DriveAbout.serializer(), resp.body?.string().orEmpty()).user ?: DriveUser()
         }
-    }
 
     suspend fun getFile(fileId: String, fields: String = "id,name,md5Checksum,size,trashed"): DriveFile =
         send { token ->
