@@ -283,47 +283,68 @@ class VerifyAndReclaimTest {
     }
 
     @Test
-    fun `external folder import walks subfolders and indexes checksums`() = runTest {
-        // resolve path "Media" → root folder id
-        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"files":[{"id":"ext-root"}]}"""))
-        // children of ext-root: one video + one subfolder
+    fun `folder sync scan indexes the tree and the app's own uploads in one pass`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"id":"ext-root","trashed":false}"""))
+        // Every folder in Drive, once: the chosen tree (ext-root > sub1 > deep), an unrelated
+        // folder, and a parent loop that must not hang the membership check
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
                 """{"files":[
-                    {"id":"v1","name":"clip.mp4","md5Checksum":"cccc","size":"500"},
-                    {"id":"sub1","name":"2024","mimeType":"application/vnd.google-apps.folder"}
+                    {"id":"ext-root","parents":["my-drive"]},
+                    {"id":"sub1","parents":["ext-root"]},
+                    {"id":"deep","parents":["sub1"]},
+                    {"id":"elsewhere","parents":["my-drive"]},
+                    {"id":"loopA","parents":["loopB"]},
+                    {"id":"loopB","parents":["loopA"]}
                 ]}"""
             )
         )
-        // children of sub1: one more video
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
-                """{"files":[{"id":"v2","name":"old.mp4","md5Checksum":"dddd","size":"900"}]}"""
+                """{"files":[
+                    {"id":"v1","name":"a.mp4","md5Checksum":"c1","size":"1","parents":["ext-root"]},
+                    {"id":"v2","name":"b.mp4","md5Checksum":"c2","size":"1","parents":["deep"]},
+                    {"id":"x1","name":"c.mp4","md5Checksum":"c3","size":"1","parents":["elsewhere"]},
+                    {"id":"x2","name":"d.mp4","md5Checksum":"c6","size":"1","parents":["loopA"]},
+                    {"id":"own1","name":"e.jpg","md5Checksum":"c4","size":"1","parents":["elsewhere"],"isAppAuthorized":true},
+                    {"id":"doc","name":"notes","parents":["sub1"]}
+                ],"nextPageToken":"p2"}"""
+            )
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[{"id":"v3","name":"f.mp4","md5Checksum":"c5","size":"1","parents":["sub1"]}]}"""
             )
         )
 
-        val imported = VerifyEngine(repo, client).importExternalFolder("Media", policy)
+        val result = VerifyEngine(repo, client).scanOwnUploadsAndFolder("ext-root", policy)
 
-        assertEquals(2, imported)
-        assertEquals("v1", db.uploadedContentDao().getByMd5("cccc")!!.driveFileId)
-        assertEquals("v2", db.uploadedContentDao().getByMd5("dddd")!!.driveFileId)
-        assertEquals(3, server.requestCount)
+        assertEquals(VerifyEngine.SyncScanResult(own = 1, inFolder = 3), result)
+        val ledger = db.uploadedContentDao()
+        listOf("c1" to "v1", "c2" to "v2", "c5" to "v3", "c4" to "own1").forEach { (md5, id) ->
+            assertEquals(id, ledger.getByMd5(md5)!!.driveFileId)
+        }
+        assertEquals(null, ledger.getByMd5("c3")) // outside the tree and not the app's own
+        assertEquals(null, ledger.getByMd5("c6")) // in a parent loop outside the tree
+        assertEquals(4, server.requestCount) // folder check + one folder listing + two file pages
+        server.takeRequest()
+        server.takeRequest()
+        assertTrue(server.takeRequest().path!!.contains("parents,isAppAuthorized"))
     }
 
     @Test
-    fun `external folder import by id validates the folder then walks it`() = runTest {
-        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"id":"ext-root","trashed":false}"""))
+    fun `folder sync scan of a deleted folder still rebuilds the own-upload ledger`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(404))
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
-                """{"files":[{"id":"v1","name":"clip.mp4","md5Checksum":"eeee","size":"500"}]}"""
+                """{"files":[{"id":"own1","name":"e.jpg","md5Checksum":"c4","size":"1","isAppAuthorized":true}]}"""
             )
         )
 
-        val imported = VerifyEngine(repo, client).importExternalFolderById("ext-root", policy)
+        val result = VerifyEngine(repo, client).scanOwnUploadsAndFolder("gone", policy)
 
-        assertEquals(2, server.requestCount)
-        assertEquals(1, imported)
-        assertEquals("v1", db.uploadedContentDao().getByMd5("eeee")!!.driveFileId)
+        assertEquals(VerifyEngine.SyncScanResult(own = 1, inFolder = null), result)
+        assertEquals("own1", db.uploadedContentDao().getByMd5("c4")!!.driveFileId)
     }
 
     @Test
@@ -342,7 +363,7 @@ class VerifyAndReclaimTest {
             )
         )
 
-        val imported = VerifyEngine(repo, client).importExternalFolderById("root", policy)
+        val imported = VerifyEngine(repo, client).importEntireDrive(policy)
 
         assertEquals(2, imported) // the checksum-less Doc is skipped
         assertEquals("d1", db.uploadedContentDao().getByMd5("1111")!!.driveFileId)
@@ -352,25 +373,6 @@ class VerifyAndReclaimTest {
         assertTrue(first.contains("'me' in owners")) // files merely shared with the user are excluded
         assertTrue(server.takeRequest().path!!.contains("pageToken=p2"))
     }
-
-    @Test
-    fun `external folder import by id returns null when folder was deleted`() = runTest {
-        server.enqueue(MockResponse().setResponseCode(404))
-
-        assertEquals(null, VerifyEngine(repo, client).importExternalFolderById("gone", policy))
-    }
-
-    @Test
-    fun `external folder import returns null when path does not exist`() = runTest {
-        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"files":[]}"""))
-
-        val imported = VerifyEngine(repo, client).importExternalFolder("No/Such/Folder", policy)
-
-        assertEquals(null, imported)
-        assertEquals(1, server.requestCount) // stops at the first missing segment
-    }
-
-    // ---- ensureFolder ----
 
     @Test
     fun `ensureFolder returns existing folder id`() = runTest {

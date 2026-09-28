@@ -230,19 +230,6 @@ class DriveClient(
         return results
     }
 
-    /** Lists the direct children of a folder (files and subfolders). */
-    suspend fun listChildren(folderId: String, pageToken: String? = null, pageSize: Int = 1000): DriveFileList {
-        val q = java.net.URLEncoder.encode("'$folderId' in parents and trashed = false", "UTF-8")
-        var url = "$base/drive/v3/files?q=$q" +
-            "&fields=nextPageToken,files(id,name,md5Checksum,size,mimeType)&pageSize=$pageSize&spaces=drive"
-        if (pageToken != null) url += "&pageToken=$pageToken"
-        return send { token ->
-            Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
-        }.use { resp ->
-            json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty())
-        }
-    }
-
     /**
      * Pages through the non-folder files this app created — wherever the user has since
      * moved them within Drive. Under drive.file alone that's everything visible; once the
@@ -250,15 +237,34 @@ class DriveClient(
      * picked out by isAppAuthorized (Drive can't filter on it server-side).
      */
     suspend fun listFiles(pageToken: String? = null, pageSize: Int = 1000): DriveFileList {
-        val q = java.net.URLEncoder.encode("trashed = false and mimeType != '$DRIVE_FOLDER_MIME'", "UTF-8")
+        val page = listAllFiles(pageToken, pageSize)
+        return page.copy(files = page.files.filter { it.isAppAuthorized })
+    }
+
+    /**
+     * Pages through every non-folder file visible to the app, with parents and
+     * isAppAuthorized — one listing that serves both the app's own uploads and a sync
+     * folder's files (see VerifyEngine.scanOwnUploadsAndFolder).
+     */
+    suspend fun listAllFiles(pageToken: String? = null, pageSize: Int = 1000): DriveFileList =
+        listPage(
+            "trashed = false and mimeType != '$DRIVE_FOLDER_MIME'",
+            "id,name,md5Checksum,size,parents,isAppAuthorized", pageToken, pageSize
+        )
+
+    /** Pages through every folder visible to the app — just ids and parents, to map the tree. */
+    suspend fun listAllFolders(pageToken: String? = null, pageSize: Int = 1000): DriveFileList =
+        listPage("mimeType = '$DRIVE_FOLDER_MIME' and trashed = false", "id,parents", pageToken, pageSize)
+
+    private suspend fun listPage(query: String, fileFields: String, pageToken: String?, pageSize: Int): DriveFileList {
+        val q = java.net.URLEncoder.encode(query, "UTF-8")
         var url = "$base/drive/v3/files?q=$q" +
-            "&fields=nextPageToken,files(id,name,md5Checksum,size,isAppAuthorized)&pageSize=$pageSize&spaces=drive"
+            "&fields=nextPageToken,files($fileFields)&pageSize=$pageSize&spaces=drive"
         if (pageToken != null) url += "&pageToken=$pageToken"
         return send { token ->
             Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
         }.use { resp ->
-            val page = json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty())
-            page.copy(files = page.files.filter { it.isAppAuthorized })
+            json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty())
         }
     }
 
@@ -267,19 +273,11 @@ class DriveClient(
      * "entire Drive" sync search. One flat listing instead of a folder-by-folder walk.
      * Files merely shared with the user are left out: their owner can delete them.
      */
-    suspend fun listOwnedFiles(pageToken: String? = null, pageSize: Int = 1000): DriveFileList {
-        val q = java.net.URLEncoder.encode(
-            "trashed = false and mimeType != '$DRIVE_FOLDER_MIME' and 'me' in owners", "UTF-8"
+    suspend fun listOwnedFiles(pageToken: String? = null, pageSize: Int = 1000): DriveFileList =
+        listPage(
+            "trashed = false and mimeType != '$DRIVE_FOLDER_MIME' and 'me' in owners",
+            "id,name,md5Checksum,size", pageToken, pageSize
         )
-        var url = "$base/drive/v3/files?q=$q" +
-            "&fields=nextPageToken,files(id,name,md5Checksum,size)&pageSize=$pageSize&spaces=drive"
-        if (pageToken != null) url += "&pageToken=$pageToken"
-        return send { token ->
-            Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
-        }.use { resp ->
-            json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty())
-        }
-    }
 
     /**
      * The account the app is connected as. about.get works under drive.file alone, so

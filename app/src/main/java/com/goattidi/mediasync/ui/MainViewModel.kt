@@ -377,21 +377,35 @@ class MainViewModel @Inject constructor(
         val text = try {
             val externalId = settings.dedupFolderId.first().trim()
             val externalPath = settings.dedupFolder.first().trim()
-            // The entire-Drive listing already includes the app's own uploads
-            val own = if (externalId == DRIVE_ROOT_ID) 0 else verifyEngine.importLedgerFromDrive()
+            val message = when {
+                // Own files across the whole Drive — this app's uploads included
+                externalId == DRIVE_ROOT_ID -> {
+                    val imported = verifyEngine.importEntireDrive()
+                    settings.setLastSyncScanAt(System.currentTimeMillis())
+                    "Sync search: indexed $imported file(s) across your Drive"
+                }
+                externalPath.isEmpty() -> {
+                    val own = verifyEngine.importLedgerFromDrive()
+                    "Sync search: indexed $own of this app's upload(s)"
+                }
+                else -> {
+                    // Installs from before the folder picker saved only a path: resolve it once,
+                    // then keep the id so later scans skip the lookup (and survive renames)
+                    val folderId = externalId.takeIf { it.isNotEmpty() }
+                        ?: driveClient.resolveFolderPath(externalPath)?.also { settings.setDedupFolder(externalPath, it) }
+                    val result = if (folderId != null) verifyEngine.scanOwnUploadsAndFolder(folderId)
+                    else VerifyEngine.SyncScanResult(verifyEngine.importLedgerFromDrive(), null)
+                    if (result.inFolder == null) {
+                        "Sync search folder \"$externalPath\" is gone from Drive — choose another"
+                    } else {
+                        settings.setLastSyncScanAt(System.currentTimeMillis())
+                        "Sync search: indexed ${result.inFolder} file(s) in \"$externalPath\" and " +
+                            "${result.own} of this app's upload(s)"
+                    }
+                }
+            }
             ledgerChecked = true
-            val imported = when {
-                externalId.isNotEmpty() -> verifyEngine.importExternalFolderById(externalId)
-                externalPath.isNotEmpty() -> verifyEngine.importExternalFolder(externalPath)
-                else -> 0
-            }
-            if (imported != null) settings.setLastSyncScanAt(System.currentTimeMillis())
-            when {
-                externalId == DRIVE_ROOT_ID -> "Sync search: indexed $imported file(s) across your Drive"
-                externalPath.isEmpty() -> "Sync search: indexed $own of this app's upload(s)"
-                imported == null -> "Sync search folder \"$externalPath\" is gone from Drive — choose another"
-                else -> "Sync search: indexed $imported file(s) in \"$externalPath\" and $own of this app's upload(s)"
-            }
+            message
         } catch (e: Exception) {
             if (announce) driveErrorMessage(e) else null
         }

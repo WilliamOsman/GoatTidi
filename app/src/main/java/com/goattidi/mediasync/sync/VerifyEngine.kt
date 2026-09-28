@@ -1,6 +1,5 @@
 package com.goattidi.mediasync.sync
 
-import com.goattidi.mediasync.data.drive.DRIVE_ROOT_ID
 import com.goattidi.mediasync.data.drive.DriveClient
 import com.goattidi.mediasync.data.drive.DriveException
 import com.goattidi.mediasync.data.drive.RetryPolicy
@@ -93,33 +92,61 @@ class VerifyEngine @Inject constructor(
         return imported
     }
 
-    /**
-     * Indexes one user-designated Drive folder tree (subfolders included) into the
-     * dedup ledger — this is how uploads from OTHER tools (rclone, Drive web) become
-     * known duplicates. Requires the read-only scope; by design this is the only
-     * place the app reads anything it didn't create, and it never leaves this tree.
-     *
-     * Returns the number of files indexed, or null if [folderPath] doesn't exist.
-     */
-    suspend fun importExternalFolder(folderPath: String, retryPolicy: RetryPolicy = RetryPolicy()): Int? {
-        val rootId = withRetry(retryPolicy) { client.resolveFolderPath(folderPath) } ?: return null
-        return walkAndImport(rootId, retryPolicy)
-    }
+    /** Counts from a sync scan. [inFolder] is null when the chosen folder is gone from Drive. */
+    data class SyncScanResult(val own: Int, val inFolder: Int?)
 
-    /** Same import, but by folder id (picker selection) — survives folder renames/moves. */
-    suspend fun importExternalFolderById(folderId: String, retryPolicy: RetryPolicy = RetryPolicy()): Int? {
-        if (folderId == DRIVE_ROOT_ID) return importEntireDrive(retryPolicy)
+    /**
+     * Sync scan for a chosen folder — how uploads from OTHER tools (rclone, Drive web)
+     * become known duplicates — together with the app's own uploads, in one pass over
+     * Drive. Requires the read-only scope; files outside the folder tree are skipped
+     * unless this app created them.
+     *
+     * Under drive.readonly, listing the app's own uploads already pages through the
+     * whole Drive, so those same pages supply the folder's files. Which files sit in the
+     * folder comes from one listing of every folder, not a walk of the tree with a
+     * request per subfolder — that walk dominated scan time on real Drives.
+     */
+    suspend fun scanOwnUploadsAndFolder(folderId: String, retryPolicy: RetryPolicy = RetryPolicy()): SyncScanResult {
         val folder = try {
             withRetry(retryPolicy) { client.getFile(folderId, fields = "id,trashed") }
         } catch (e: DriveException.NotFound) {
-            return null
+            null
         }
-        if (folder.trashed) return null
-        return walkAndImport(folderId, retryPolicy)
+        if (folder == null || folder.trashed) return SyncScanResult(importLedgerFromDrive(retryPolicy), null)
+
+        val parentsOf = HashMap<String, List<String>>()
+        var pageToken: String? = null
+        do {
+            val page = withRetry(retryPolicy) { client.listAllFolders(pageToken) }
+            for (f in page.files) parentsOf[f.id] = f.parents
+            pageToken = page.nextPageToken
+        } while (pageToken != null)
+        val tree = FolderTree(folderId, parentsOf)
+
+        var own = 0
+        var inFolder = 0
+        val now = System.currentTimeMillis()
+        do {
+            val page = withRetry(retryPolicy) { client.listAllFiles(pageToken) }
+            for (file in page.files) {
+                val md5 = file.md5Checksum ?: continue // Docs/Sheets etc. have no checksum
+                val mine = file.isAppAuthorized
+                val inside = file.parents.any(tree::contains)
+                if (!mine && !inside) continue
+                repository.recordUploaded(md5, file.id, file.name ?: "", file.size?.toLongOrNull() ?: 0L, now)
+                if (mine) own++
+                if (inside) inFolder++
+            }
+            pageToken = page.nextPageToken
+        } while (pageToken != null)
+        return SyncScanResult(own, inFolder)
     }
 
-    /** Whole-Drive variant: one flat listing of the user's own files, no folder walk. */
-    private suspend fun importEntireDrive(retryPolicy: RetryPolicy): Int {
+    /**
+     * Sync scan for the entire Drive: one flat listing of the user's own files, which
+     * also covers this app's uploads. Files merely shared with the user are left out.
+     */
+    suspend fun importEntireDrive(retryPolicy: RetryPolicy = RetryPolicy()): Int {
         var imported = 0
         var pageToken: String? = null
         val now = System.currentTimeMillis()
@@ -135,30 +162,19 @@ class VerifyEngine @Inject constructor(
         return imported
     }
 
-    private suspend fun walkAndImport(rootId: String, retryPolicy: RetryPolicy): Int {
-        var imported = 0
-        val now = System.currentTimeMillis()
-        val queue = ArrayDeque(listOf(rootId))
-        val seen = mutableSetOf(rootId) // shortcuts/moves must not loop the walk
-        while (queue.isNotEmpty()) {
-            val folderId = queue.removeFirst()
-            var pageToken: String? = null
-            do {
-                val page = withRetry(retryPolicy) { client.listChildren(folderId, pageToken) }
-                for (file in page.files) {
-                    if (file.isFolder) {
-                        if (seen.add(file.id)) queue.addLast(file.id)
-                    } else {
-                        val md5 = file.md5Checksum ?: continue
-                        repository.recordUploaded(
-                            md5, file.id, file.name ?: "", file.size?.toLongOrNull() ?: 0L, now
-                        )
-                        imported++
-                    }
-                }
-                pageToken = page.nextPageToken
-            } while (pageToken != null)
+    /** Whether a folder lies inside [rootId]'s tree, answered from a parent map of every folder. */
+    private class FolderTree(private val rootId: String, private val parentsOf: Map<String, List<String>>) {
+        private val memo = HashMap<String, Boolean>()
+
+        fun contains(folderId: String): Boolean = check(folderId, HashSet())
+
+        private fun check(id: String, visiting: MutableSet<String>): Boolean {
+            if (id == rootId) return true
+            memo[id]?.let { return it }
+            if (!visiting.add(id)) return false // Drive shouldn't have cycles, but never loop on one
+            val result = parentsOf[id].orEmpty().any { check(it, visiting) }
+            memo[id] = result
+            return result
         }
-        return imported
     }
 }
