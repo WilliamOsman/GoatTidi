@@ -17,6 +17,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -143,8 +146,14 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
                 navigationIcon = {
                     when {
                         state.screen != Screen.GALLERY ->
-                            IconButton(onClick = { viewModel.openGallery() }) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to gallery")
+                            TextButton(onClick = { viewModel.openGallery() }) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("Gallery")
                             }
                         state.selectionMode ->
                             IconButton(onClick = { viewModel.clearSelection() }) {
@@ -161,7 +170,8 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
                         else -> Column {
                             Text("GoatTidi", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "${state.syncedCount} of ${state.totalCount} synced",
+                                if (state.uploadSelectedCount == 0) "Nothing selected for upload"
+                                else "${state.syncedCount}/${state.uploadSelectedCount} synced",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

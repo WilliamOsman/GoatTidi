@@ -63,7 +63,7 @@ fun statusBadge(status: SyncStatus): String = when (status) {
 }
 
 /** Border color per status: grey unsynced, blue syncing, green synced, amber/red trouble. */
-private fun statusColor(status: SyncStatus): Color = when (status) {
+fun statusColor(status: SyncStatus): Color = when (status) {
     SyncStatus.NOT_UPLOADED -> Color(0xFF9E9E9E)          // grey
     SyncStatus.QUEUED -> Color(0xFF2196F3)                // blue (static while waiting)
     SyncStatus.UPLOADING -> Color(0xFF2196F3)             // blue (breathing, see MediaTile)

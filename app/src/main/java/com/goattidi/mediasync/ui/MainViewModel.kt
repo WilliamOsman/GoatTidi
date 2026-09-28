@@ -69,6 +69,8 @@ class MainViewModel @Inject constructor(
         val records: List<SyncRecord> = emptyList(),
         val totalCount: Int = 0,
         val syncedCount: Int = 0,
+        /** Files the user has sent for upload: everything that has left NOT_UPLOADED. */
+        val uploadSelectedCount: Int = 0,
         val screen: Screen = Screen.GALLERY,
         val filter: Filter = Filter.ALL,
         val selected: Set<Long> = emptySet(),
@@ -110,6 +112,7 @@ class MainViewModel @Inject constructor(
             records = visible,
             totalCount = records.size,
             syncedCount = records.count { it.status == SyncStatus.SYNCED },
+            uploadSelectedCount = records.count { it.status != SyncStatus.NOT_UPLOADED },
             folderName = p.folderName,
             layout = p.layout,
             wifiOnly = p.wifiOnly,
