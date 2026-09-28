@@ -84,6 +84,8 @@ class MainViewModel @Inject constructor(
         val chargingOnly: Boolean = false,
         val dedupFolder: String = "",
         val folderPicker: FolderPicker? = null,
+        /** null until checked; set by the Settings status check and every connect attempt. */
+        val driveConnected: Boolean? = null,
         /** Active work: UPLOADING first, then QUEUED, then FAILED. */
         val queue: List<SyncRecord> = emptyList()
     ) {
@@ -177,6 +179,23 @@ class MainViewModel @Inject constructor(
             val queued = repository.enqueue(ids)
             scheduler.scheduleNow(settings.wifiOnly.first(), settings.chargingOnly.first())
             ui.update { it.copy(selected = emptySet(), message = "$queued file(s) queued for upload") }
+            // The worker runs in the background and can't show Google's consent screen, so
+            // without this a first-time user's queue just stalls on "authorization required".
+            // The files stay queued either way; connecting reschedules them.
+            val authError = try {
+                authProvider.accessToken()
+                null
+            } catch (e: DriveAuthConsentRequired) {
+                e
+            } catch (e: DriveException.AuthFailed) {
+                e
+            } catch (e: Exception) {
+                null // Network and other transient errors are the worker's to retry
+            }
+            if (authError != null) {
+                val text = driveErrorMessage(authError)
+                ui.update { it.copy(driveConnected = false, message = text) }
+            }
         }
     }
 
@@ -284,19 +303,29 @@ class MainViewModel @Inject constructor(
 
     fun connectDrive() {
         viewModelScope.launch {
-            val text = try {
+            try {
                 authProvider.accessToken()
-                "Google Drive connected"
+                ui.update { it.copy(driveConnected = true, message = "Google Drive connected") }
+                // Auth failures park the worker in backoff; don't make a waiting queue sit it out
+                rescheduleIfQueueActive()
             } catch (e: Exception) {
-                driveErrorMessage(e)
+                val text = driveErrorMessage(e)
+                ui.update { it.copy(driveConnected = false, message = text) }
             }
-            ui.update { it.copy(message = text) }
+        }
+    }
+
+    /** Silent status check for Settings: never launches the consent screen. */
+    private fun checkDriveConnection() {
+        viewModelScope.launch {
+            val connected = runCatching { authProvider.accessToken() }.isSuccess
+            ui.update { it.copy(driveConnected = connected) }
         }
     }
 
     fun onConsentResult(granted: Boolean) {
         ui.update { it.copy(consentIntent = null) }
-        if (granted) connectDrive()
+        if (granted) connectDrive() else ui.update { it.copy(driveConnected = false) }
     }
 
     fun openReclaim() {
@@ -307,7 +336,10 @@ class MainViewModel @Inject constructor(
 
     fun openGallery() = ui.update { it.copy(screen = Screen.GALLERY) }
 
-    fun openSettings() = ui.update { it.copy(screen = Screen.SETTINGS) }
+    fun openSettings() {
+        ui.update { it.copy(screen = Screen.SETTINGS) }
+        checkDriveConnection()
+    }
 
     fun openQueue() = ui.update { it.copy(screen = Screen.QUEUE) }
 

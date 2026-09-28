@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.style.TextOverflow
+import com.goattidi.mediasync.data.db.SyncStatus
 import com.goattidi.mediasync.data.repo.DriveLayout
 
 private fun layoutLabel(layout: DriveLayout): String = when (layout) {
@@ -47,6 +48,29 @@ fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        Text("Google Drive account", style = MaterialTheme.typography.titleMedium)
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                when (state.driveConnected) {
+                    null -> "Checking…"
+                    true -> "✓ Connected"
+                    false -> "Not connected — uploads wait until you connect"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = when (state.driveConnected) {
+                    true -> statusColor(SyncStatus.SYNCED)
+                    false -> MaterialTheme.colorScheme.error
+                    null -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.weight(1f)
+            )
+            if (state.driveConnected == false) {
+                TextButton(onClick = { viewModel.connectDrive() }) { Text("Connect Google Drive") }
+            }
+        }
+
+        HorizontalDivider()
+
         Text("Google Drive destination", style = MaterialTheme.typography.titleMedium)
         OutlinedTextField(
             value = folderName,

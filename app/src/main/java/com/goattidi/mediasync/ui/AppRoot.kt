@@ -189,17 +189,10 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
                             state.screen != Screen.GALLERY -> {}
                             state.selectionMode ->
                                 TextButton(onClick = { viewModel.syncSelected() }) { Text("Upload") }
-                            else -> {
+                            else ->
                                 IconButton(onClick = { viewModel.openSettings() }) {
                                     Icon(Icons.Default.Settings, contentDescription = "Settings")
                                 }
-                                OverflowMenu(
-                                    listOf(
-                                        "Upload queue" to viewModel::openQueue,
-                                        "Connect Google Drive" to viewModel::connectDrive
-                                    )
-                                )
-                            }
                         }
                     }
                 )
