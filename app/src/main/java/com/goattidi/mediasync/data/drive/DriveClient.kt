@@ -244,19 +244,21 @@ class DriveClient(
     }
 
     /**
-     * Pages through every non-folder file visible to the app. Under the drive.file
-     * scope that is exactly the set of files this app created — wherever the user
-     * has since moved them within Drive.
+     * Pages through the non-folder files this app created — wherever the user has since
+     * moved them within Drive. Under drive.file alone that's everything visible; once the
+     * user opts into drive.readonly the whole Drive is visible, so the app's own files are
+     * picked out by isAppAuthorized (Drive can't filter on it server-side).
      */
     suspend fun listFiles(pageToken: String? = null, pageSize: Int = 1000): DriveFileList {
         val q = java.net.URLEncoder.encode("trashed = false and mimeType != '$DRIVE_FOLDER_MIME'", "UTF-8")
         var url = "$base/drive/v3/files?q=$q" +
-            "&fields=nextPageToken,files(id,name,md5Checksum,size)&pageSize=$pageSize&spaces=drive"
+            "&fields=nextPageToken,files(id,name,md5Checksum,size,isAppAuthorized)&pageSize=$pageSize&spaces=drive"
         if (pageToken != null) url += "&pageToken=$pageToken"
         return send { token ->
             Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
         }.use { resp ->
-            json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty())
+            val page = json.decodeFromString(DriveFileList.serializer(), resp.body?.string().orEmpty())
+            page.copy(files = page.files.filter { it.isAppAuthorized })
         }
     }
 

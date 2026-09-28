@@ -241,14 +241,14 @@ class VerifyAndReclaimTest {
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
                 """{"files":[
-                    {"id":"f1","name":"a.mp4","md5Checksum":"aaaa","size":"100"},
-                    {"id":"f2","name":"doc-no-checksum"}
+                    {"id":"f1","name":"a.mp4","md5Checksum":"aaaa","size":"100","isAppAuthorized":true},
+                    {"id":"f2","name":"doc-no-checksum","isAppAuthorized":true}
                 ],"nextPageToken":"page2"}"""
             )
         )
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
-                """{"files":[{"id":"f3","name":"b.jpg","md5Checksum":"BBBB","size":"200"}]}"""
+                """{"files":[{"id":"f3","name":"b.jpg","md5Checksum":"BBBB","size":"200","isAppAuthorized":true}]}"""
             )
         )
 
@@ -260,6 +260,26 @@ class VerifyAndReclaimTest {
         assertEquals(2, server.requestCount)
         assertTrue(server.takeRequest().path!!.contains("fields=nextPageToken"))
         assertTrue(server.takeRequest().path!!.contains("pageToken=page2"))
+    }
+
+    @Test
+    fun `ledger import skips files the app didn't create when drive_readonly is granted`() = runTest {
+        // With the opt-in read scope the listing spans the whole Drive; only the app's
+        // own uploads belong in the ledger — never the user's other files
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"files":[
+                    {"id":"mine","name":"a.mp4","md5Checksum":"aaaa","size":"100","isAppAuthorized":true},
+                    {"id":"theirs","name":"b.jpg","md5Checksum":"cccc","size":"200","isAppAuthorized":false}
+                ]}"""
+            )
+        )
+
+        val imported = VerifyEngine(repo, client).importLedgerFromDrive(policy)
+
+        assertEquals(1, imported)
+        assertEquals("mine", db.uploadedContentDao().getByMd5("aaaa")!!.driveFileId)
+        assertEquals(null, db.uploadedContentDao().getByMd5("cccc"))
     }
 
     @Test

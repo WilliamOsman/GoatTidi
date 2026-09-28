@@ -56,6 +56,21 @@ class SyncSettings @Inject constructor(
     /** Drive id of that folder (authoritative — survives renames). Empty = resolve by path. */
     val dedupFolderId: Flow<String> = context.dataStore.data.map { it[keyDedupFolderId] ?: "" }
 
+    private val keyExternalRead = booleanPreferencesKey("external_read_enabled")
+
+    /**
+     * Whether to request drive.readonly on top of drive.file. Opt-in: only the external
+     * duplicate-check folder needs it. Unset on installs from before it was opt-in, which
+     * already held the scope — keep it for anyone who has a duplicate-check folder set.
+     */
+    val externalReadEnabled: Flow<Boolean> = context.dataStore.data.map {
+        it[keyExternalRead] ?: !it[keyDedupFolder].isNullOrBlank()
+    }
+
+    suspend fun setExternalReadEnabled(value: Boolean) {
+        context.dataStore.edit { it[keyExternalRead] = value }
+    }
+
     suspend fun setDedupFolder(path: String, id: String = "") {
         context.dataStore.edit {
             it[keyDedupFolder] = path.trim()

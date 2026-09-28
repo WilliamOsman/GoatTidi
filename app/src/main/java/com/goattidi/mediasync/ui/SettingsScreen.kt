@@ -127,7 +127,7 @@ fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
 
         Text("Duplicate detection", style = MaterialTheme.typography.titleMedium)
         Text(
-            if (state.dedupFolder.isBlank()) "No Drive folder selected"
+            if (state.dedupFolder.isBlank()) "Off — recognizes files this app uploaded, even after you move them in Drive"
             else "Also checking: ${state.dedupFolder}",
             style = MaterialTheme.typography.bodyMedium
         )
@@ -142,7 +142,8 @@ fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
             "Rebuild scans this app's own uploads (any folder) plus the folder tree above — " +
                 "including files uploaded by other tools — and indexes their checksums. " +
                 "Anything whose exact bytes are already on Drive is marked synced instead of " +
-                "re-uploaded. The app reads only the tree you name here, nothing else.",
+                "re-uploaded. Choosing a folder asks Google for read-only access to your Drive, " +
+                "which the app uses only to scan that folder tree. Clear stops the app requesting it.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

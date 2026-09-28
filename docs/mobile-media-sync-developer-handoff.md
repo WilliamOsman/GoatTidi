@@ -180,6 +180,6 @@ Provisioning gotchas, each of which silently breaks uploads until fixed:
 1. **Enable the Drive API** on the Google Cloud project (`APIs & Services → Library → Google Drive API → Enable`). Calls return `403 SERVICE_DISABLED` until this propagates (~1–2 min).
 2. **Create an *Android* OAuth client** (`Credentials → Create → OAuth client ID → Android`) keyed to the app's **package name + SHA-1 signing-cert fingerprint** — *not* a Web or Desktop client. Register both the debug and release SHA-1s.
 3. **OAuth consent screen:** in **Testing** mode Google **expires the refresh token after 7 days**. Either add the account under *Test users* (fine for personal sideload) or **publish** the app — otherwise auth silently dies a week in.
-4. **Scope:** request **`drive.file`** only — the app sees just the files it created. Smallest trust surface, no Google verification review required.
+4. **Scope:** request **`drive.file`** by default — the app sees just the files it created, wherever the user later moves them. Smallest trust surface, no Google verification review required. **`drive.readonly`** is opt-in: requested only when the user picks an external duplicate-check folder (Settings), and dropped again when they clear it. Note it is a *restricted* scope — publishing an app that requests it needs Google's verification review.
 5. **Token storage:** keep refresh tokens in **EncryptedSharedPreferences / Android Keystore**, never plaintext.
 6. **Auth stack:** Credential Manager + `AuthorizationClient` (the legacy GoogleSignIn SDK is deprecated).

@@ -94,6 +94,9 @@ class MainViewModel @Inject constructor(
 
     private val ui = MutableStateFlow(UiState())
 
+    /** What to resume once Google's consent screen returns; null = a plain connect. */
+    private var afterConsent: (() -> Unit)? = null
+
     private data class Prefs(
         val folderName: String,
         val layout: DriveLayout,
@@ -224,7 +227,23 @@ class MainViewModel @Inject constructor(
 
     // ---- Drive folder picker ----
 
-    fun openFolderPicker() = loadPickerLevel(listOf("root" to "My Drive"))
+    /**
+     * Browsing the user's folders is the one place the app needs drive.readonly, so the
+     * opt-in grant is requested here — never at connect time.
+     */
+    fun openFolderPicker() {
+        viewModelScope.launch {
+            try {
+                authProvider.authorizeExternalRead()
+                settings.setExternalReadEnabled(true)
+                loadPickerLevel(listOf("root" to "My Drive"))
+            } catch (e: Exception) {
+                if (e is DriveAuthConsentRequired) afterConsent = ::openFolderPicker
+                val text = driveErrorMessage(e)
+                ui.update { it.copy(message = text) }
+            }
+        }
+    }
 
     fun pickerEnter(folder: DriveFile) {
         val current = ui.value.folderPicker ?: return
@@ -236,7 +255,13 @@ class MainViewModel @Inject constructor(
         if (current.breadcrumb.size > 1) loadPickerLevel(current.breadcrumb.dropLast(1))
     }
 
-    fun pickerDismiss() = ui.update { it.copy(folderPicker = null) }
+    fun pickerDismiss() {
+        ui.update { it.copy(folderPicker = null) }
+        viewModelScope.launch {
+            // Cancelled a first-time setup: nothing to scan, so stop requesting the read scope
+            if (settings.dedupFolder.first().isBlank()) settings.setExternalReadEnabled(false)
+        }
+    }
 
     fun pickerSelect() {
         val picker = ui.value.folderPicker ?: return
@@ -256,7 +281,10 @@ class MainViewModel @Inject constructor(
     fun clearDedupFolder() {
         viewModelScope.launch {
             settings.setDedupFolder("", "")
-            ui.update { it.copy(message = "Duplicate-check folder cleared") }
+            settings.setExternalReadEnabled(false)
+            ui.update {
+                it.copy(message = "Duplicate-check folder cleared — the app no longer requests read access to your Drive")
+            }
         }
     }
 
@@ -325,7 +353,13 @@ class MainViewModel @Inject constructor(
 
     fun onConsentResult(granted: Boolean) {
         ui.update { it.copy(consentIntent = null) }
-        if (granted) connectDrive() else ui.update { it.copy(driveConnected = false) }
+        val next = afterConsent
+        afterConsent = null
+        when {
+            granted -> next?.invoke() ?: connectDrive()
+            // Declining the opt-in read scope leaves the base drive.file connection as it was
+            next == null -> ui.update { it.copy(driveConnected = false) }
+        }
     }
 
     fun openReclaim() {

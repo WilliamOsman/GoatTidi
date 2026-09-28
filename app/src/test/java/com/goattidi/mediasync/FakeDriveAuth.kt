@@ -10,4 +10,6 @@ class FakeDriveAuth : DriveAuthProvider {
         if (forceRefresh) refreshes++
         return if (refreshes == 0) "token-initial" else "token-refreshed-$refreshes"
     }
+
+    override suspend fun authorizeExternalRead() {}
 }
