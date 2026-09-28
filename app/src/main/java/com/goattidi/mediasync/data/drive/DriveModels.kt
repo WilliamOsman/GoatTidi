@@ -22,6 +22,13 @@ data class DriveFile(
     val isFolder: Boolean get() = mimeType == DRIVE_FOLDER_MIME
 }
 
+/** The signed-in Drive user, from about.get. */
+@Serializable
+data class DriveUser(val emailAddress: String? = null, val displayName: String? = null)
+
+@Serializable
+data class DriveAbout(val user: DriveUser? = null)
+
 @Serializable
 data class DriveFileList(
     val files: List<DriveFile> = emptyList(),

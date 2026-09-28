@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -30,6 +32,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.style.TextOverflow
 import com.goattidi.mediasync.data.db.SyncStatus
@@ -55,6 +59,7 @@ private fun syncDetectionDescription(state: MainViewModel.UiState): String {
 private fun syncScanStatus(state: MainViewModel.UiState): String = when {
     state.syncScanning -> "Scanning…"
     state.lastSyncScanAt == 0L -> "Not scanned yet"
+    System.currentTimeMillis() - state.lastSyncScanAt < DateUtils.MINUTE_IN_MILLIS -> "Last scanned just now"
     else -> "Last scanned " + DateUtils.getRelativeTimeSpanString(
         state.lastSyncScanAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS
     ).toString().replaceFirstChar { it.lowercase() }
@@ -63,6 +68,7 @@ private fun syncScanStatus(state: MainViewModel.UiState): String = when {
 @Composable
 fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
     var folderName by remember(state.folderName) { mutableStateOf(state.folderName) }
+    val focusManager = LocalFocusManager.current
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -73,7 +79,7 @@ fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
             Text(
                 when (state.driveConnected) {
                     null -> "Checking…"
-                    true -> "✓ Connected"
+                    true -> state.driveAccountEmail?.let { "✓ Connected as $it" } ?: "✓ Connected"
                     false -> "Not connected — uploads wait until you connect"
                 },
                 style = MaterialTheme.typography.bodyMedium,
@@ -92,21 +98,27 @@ fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
         HorizontalDivider()
 
         Text("Google Drive destination", style = MaterialTheme.typography.titleMedium)
+        // Save lives inside the field and appears only once the name actually changes
+        val folderNameChanged = folderName.isNotBlank() && folderName.trim() != state.folderName
         OutlinedTextField(
             value = folderName,
             onValueChange = { folderName = it },
-            label = { Text("Folder name") },
+            label = { Text("New Folder Name") },
             singleLine = true,
+            trailingIcon = if (folderNameChanged) {
+                { TextButton(onClick = { viewModel.saveFolderName(folderName) }) { Text("Save") } }
+            } else null,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = {
+                if (folderNameChanged) viewModel.saveFolderName(folderName)
+                focusManager.clearFocus()
+            }),
             modifier = Modifier.fillMaxWidth()
         )
-        TextButton(
-            onClick = { viewModel.saveFolderName(folderName) },
-            enabled = folderName.isNotBlank() && folderName.trim() != state.folderName
-        ) { Text("Save folder name") }
 
         HorizontalDivider()
 
-        Text("Layout inside the folder", style = MaterialTheme.typography.titleMedium)
+        Text("Layout inside ${state.folderName}/", style = MaterialTheme.typography.titleMedium)
         DriveLayout.entries.forEach { layout ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -145,7 +157,7 @@ fun SettingsContent(state: MainViewModel.UiState, viewModel: MainViewModel) {
 
         HorizontalDivider()
 
-        Text("Sync detection", style = MaterialTheme.typography.titleMedium)
+        Text("Sync Settings", style = MaterialTheme.typography.titleMedium)
         Text(syncDetectionDescription(state), style = MaterialTheme.typography.bodyMedium)
         val expanded = state.dedupFolder.isNotBlank()
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {

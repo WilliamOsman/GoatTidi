@@ -281,6 +281,21 @@ class DriveClient(
         }
     }
 
+    /**
+     * The account the app is connected as. about.get works under drive.file alone, so
+     * showing the email needs no extra scope or consent.
+     */
+    suspend fun getUser(): DriveUser =
+        send { token ->
+            Request.Builder()
+                .url("$base/drive/v3/about?fields=user(emailAddress,displayName)")
+                .get()
+                .header("Authorization", "Bearer $token")
+                .build()
+        }.use { resp ->
+            json.decodeFromString(DriveAbout.serializer(), resp.body?.string().orEmpty()).user ?: DriveUser()
+        }
+
     suspend fun getFile(fileId: String, fields: String = "id,name,md5Checksum,size,trashed"): DriveFile =
         send { token ->
             Request.Builder()

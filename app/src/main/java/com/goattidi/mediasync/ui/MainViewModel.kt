@@ -85,7 +85,7 @@ class MainViewModel @Inject constructor(
         val message: String? = null,
         val consentIntent: PendingIntent? = null,
         val reclaimCandidates: List<SyncRecord> = emptyList(),
-        val folderName: String = SyncSettings.DEFAULT_FOLDER_NAME,
+        val folderName: String = "",
         val layout: DriveLayout = DriveLayout.FLAT,
         val wifiOnly: Boolean = true,
         val chargingOnly: Boolean = false,
@@ -93,6 +93,8 @@ class MainViewModel @Inject constructor(
         val folderPicker: FolderPicker? = null,
         /** null until checked; set by the Settings status check and every connect attempt. */
         val driveConnected: Boolean? = null,
+        /** Email of the connected Drive account; null if not connected or not yet known. */
+        val driveAccountEmail: String? = null,
         /** Sync search covers the whole Drive (the default once expanded) rather than one folder. */
         val syncSearchEntireDrive: Boolean = false,
         /** When the sync-search index was last rebuilt (epoch ms); 0 = never. */
@@ -250,7 +252,7 @@ class MainViewModel @Inject constructor(
             scheduler.scheduleNow(settings.wifiOnly.first(), settings.chargingOnly.first())
             if (authError != null) {
                 val text = driveErrorMessage(authError)
-                ui.update { it.copy(driveConnected = false, message = text) }
+                ui.update { it.copy(driveConnected = false, driveAccountEmail = null, message = text) }
             }
         }
     }
@@ -436,12 +438,13 @@ class MainViewModel @Inject constructor(
             try {
                 authProvider.accessToken()
                 ui.update { it.copy(driveConnected = true, message = "Google Drive connected") }
+                loadDriveAccountEmail()
                 runCatching { ensureOwnLedger() }
                 // Auth failures park the worker in backoff; don't make a waiting queue sit it out
                 rescheduleIfQueueActive()
             } catch (e: Exception) {
                 val text = driveErrorMessage(e)
-                ui.update { it.copy(driveConnected = false, message = text) }
+                ui.update { it.copy(driveConnected = false, driveAccountEmail = null, message = text) }
             }
         }
     }
@@ -450,8 +453,15 @@ class MainViewModel @Inject constructor(
     private fun checkDriveConnection() {
         viewModelScope.launch {
             val connected = runCatching { authProvider.accessToken() }.isSuccess
-            ui.update { it.copy(driveConnected = connected) }
+            ui.update { it.copy(driveConnected = connected, driveAccountEmail = if (connected) it.driveAccountEmail else null) }
+            if (connected) loadDriveAccountEmail()
         }
+    }
+
+    /** Best effort: offline or on any error, Settings just shows "Connected" without the email. */
+    private suspend fun loadDriveAccountEmail() {
+        val email = runCatching { driveClient.getUser().emailAddress }.getOrNull() ?: return
+        ui.update { it.copy(driveAccountEmail = email) }
     }
 
     fun onConsentResult(granted: Boolean) {
@@ -461,7 +471,7 @@ class MainViewModel @Inject constructor(
         when {
             granted -> next?.invoke() ?: connectDrive()
             // Declining the opt-in read scope leaves the base drive.file connection as it was
-            next == null -> ui.update { it.copy(driveConnected = false) }
+            next == null -> ui.update { it.copy(driveConnected = false, driveAccountEmail = null) }
         }
     }
 
@@ -486,7 +496,7 @@ class MainViewModel @Inject constructor(
 
     fun saveFolderName(name: String) {
         viewModelScope.launch {
-            val trimmed = name.trim().ifEmpty { SyncSettings.DEFAULT_FOLDER_NAME }
+            val trimmed = name.trim().ifEmpty { settings.defaultFolderName }
             settings.setFolderName(trimmed)
             ui.update { it.copy(message = "Future uploads go to \"$trimmed\"") }
         }

@@ -18,7 +18,7 @@ A file is marked **✓ Synced** only when Drive reports an MD5 checksum that mat
 - Tap-and-hold to select, then upload; filters for type and sync status
 - Resumable uploads that survive network drops, app kills, and reboots — they continue from the last confirmed byte, not from zero
 - Upload queue with per-file progress, transfer rate, and ETA; Wi-Fi-only and charging-only options
-- Destination folder of your choice (default **Phone Media**), laid out flat, by month, or by source folder (Camera, WhatsApp, …)
+- Destination folder of your choice (default **GoatTidi_<device name>**, e.g. `GoatTidi_Galaxy S23`), laid out flat, by month, or by source folder (Camera, WhatsApp, …)
 - Sync detection by checksum: a file whose exact bytes are already on Drive is marked synced instead of uploaded again — including files you've since moved or renamed on your phone, and files you moved around in Drive. Optionally, it also recognizes files that reached Drive some other way
 
 ## Privacy and permissions

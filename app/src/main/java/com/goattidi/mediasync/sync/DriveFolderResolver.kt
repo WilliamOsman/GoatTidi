@@ -21,7 +21,7 @@ fun interface DriveFolderResolver {
 
 /**
  * Resolves the destination per the user's settings: the root folder (default
- * "Phone Media", find-or-create, id cached) plus an optional subfolder per the
+ * "GoatTidi_<device name>", find-or-create, id cached) plus an optional subfolder per the
  * chosen layout — upload month ("2026-07") or the file's local source folder
  * ("Camera", "WhatsApp Video"). This app owns its root folder — deliberately
  * separate from folders other tools manage (§4.4).
@@ -70,8 +70,9 @@ class SettingsDriveFolderResolver @Inject constructor(
             settings.clearCachedFolderId()
             childCache.clear()
         }
-        val id = client.ensureFolder(settings.folderName.first())
-        settings.setCachedFolderId(id)
+        val name = settings.folderName.first()
+        val id = client.ensureFolder(name)
+        settings.setCachedFolderId(id, name)
         confirmedRootId = id
         return id
     }

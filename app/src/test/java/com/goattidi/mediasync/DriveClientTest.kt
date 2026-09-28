@@ -34,6 +34,21 @@ class DriveClientTest {
     }
 
     @Test
+    fun `getUser reads the connected account from about_get`() = runTest {
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .setBody("""{"user":{"emailAddress":"someone@example.com","displayName":"Some One"}}""")
+        )
+
+        val user = client.getUser()
+
+        assertEquals("someone@example.com", user.emailAddress)
+        val req = server.takeRequest()
+        assertEquals("GET", req.method)
+        assertTrue(req.path!!.startsWith("/drive/v3/about?fields=user(emailAddress,displayName)"))
+    }
+
+    @Test
     fun `start session returns Location and sends upload headers`() = runTest {
         server.enqueue(
             MockResponse().setResponseCode(200).setHeader("Location", server.url("/upload/sess-1").toString())
