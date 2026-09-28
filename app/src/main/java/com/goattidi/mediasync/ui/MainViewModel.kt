@@ -54,6 +54,20 @@ enum class Filter(val label: String) {
     SYNCED("Synced")
 }
 
+/**
+ * The snackbar text after a delete: [requested] files were sent for deletion, [notDeleted]
+ * of them are still on the device afterwards, [skipped] failed the safety re-check earlier.
+ */
+internal fun deleteOutcomeMessage(requested: Int, notDeleted: Int, skipped: Int): String {
+    val deleted = requested - notDeleted
+    val main = when {
+        notDeleted == 0 -> if (deleted == 1) "Deleted 1 file — space reclaimed" else "Deleted $deleted files — space reclaimed"
+        deleted == 0 -> "Nothing was deleted — Android didn't allow it"
+        else -> "Deleted $deleted of $requested files — $notDeleted couldn't be deleted"
+    }
+    return if (skipped > 0) "$main · $skipped skipped by the safety re-check" else main
+}
+
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val repository: SyncStateRepository,
@@ -84,6 +98,7 @@ class MainViewModel @Inject constructor(
         val busy: Boolean = false,
         val message: String? = null,
         val consentIntent: PendingIntent? = null,
+        /** Derived from the live records (see ReclaimEngine.candidatesFrom), never set by hand. */
         val reclaimCandidates: List<SyncRecord> = emptyList(),
         val folderName: String = "",
         val layout: DriveLayout = DriveLayout.FLAT,
@@ -117,6 +132,10 @@ class MainViewModel @Inject constructor(
 
     /** Set once this process has confirmed (or rebuilt) the own-upload ledger. */
     private var ledgerChecked = false
+
+    /** Files handed to the UI for deletion, so the outcome can be checked afterwards. */
+    private data class PendingDelete(val ids: List<Long>, val skipped: Int)
+    private var pendingDelete: PendingDelete? = null
 
     /**
      * MediaStore scans, run one at a time. Conflated: however many requests arrive while
@@ -153,6 +172,7 @@ class MainViewModel @Inject constructor(
             wifiOnly = p.wifiOnly,
             chargingOnly = p.chargingOnly,
             dedupFolder = p.dedupFolder,
+            reclaimCandidates = ReclaimEngine.candidatesFrom(records),
             queue = records
                 .filter {
                     it.status == SyncStatus.UPLOADING || it.status == SyncStatus.QUEUED ||
@@ -274,9 +294,7 @@ class MainViewModel @Inject constructor(
             } catch (e: Exception) {
                 driveErrorMessage(e)
             }
-            // Verify can demote files (orphaned / modified), so the reclaim list must be re-read
-            val candidates = reclaimEngine.candidates()
-            ui.update { it.copy(busy = false, message = text, reclaimCandidates = candidates) }
+            ui.update { it.copy(busy = false, message = text) }
         }
     }
 
@@ -489,11 +507,7 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun openReclaim() {
-        viewModelScope.launch {
-            ui.update { it.copy(screen = Screen.RECLAIM, reclaimCandidates = reclaimEngine.candidates()) }
-        }
-    }
+    fun openReclaim() = ui.update { it.copy(screen = Screen.RECLAIM) }
 
     fun openGallery() = ui.update { it.copy(screen = Screen.GALLERY) }
 
@@ -564,7 +578,10 @@ class MainViewModel @Inject constructor(
                 ReclaimEngine.Gate.Blocked(driveErrorMessage(e))
             }) {
                 is ReclaimEngine.Gate.Safe -> {
-                    repository.getById(id)?.let { _deleteRequests.emit(listOf(Uri.parse(it.localUri))) }
+                    repository.getById(id)?.let {
+                        pendingDelete = PendingDelete(listOf(id), skipped = 0)
+                        _deleteRequests.emit(listOf(Uri.parse(it.localUri)))
+                    }
                 }
                 is ReclaimEngine.Gate.Blocked ->
                     ui.update { it.copy(message = "Not deleted: ${gate.reason}") }
@@ -596,11 +613,11 @@ class MainViewModel @Inject constructor(
                     }
                 }.awaitAll()
             }
-            val safeUris = results
+            val safe = results
                 .filter { (_, g) -> g is ReclaimEngine.Gate.Safe }
-                .map { (candidate, _) -> Uri.parse(candidate.localUri) }
-            val blocked = results.size - safeUris.size
-            if (safeUris.isEmpty()) {
+                .map { (candidate, _) -> candidate }
+            val blocked = results.size - safe.size
+            if (safe.isEmpty()) {
                 ui.update {
                     it.copy(
                         busy = false,
@@ -609,20 +626,32 @@ class MainViewModel @Inject constructor(
                     )
                 }
             } else {
-                if (blocked > 0) {
-                    ui.update { it.copy(message = "$blocked file(s) skipped by the safety re-check") }
-                }
-                _deleteRequests.emit(safeUris)
+                pendingDelete = PendingDelete(safe.map { it.mediaStoreId }, skipped = blocked)
+                _deleteRequests.emit(safe.map { Uri.parse(it.localUri) })
                 ui.update { it.copy(busy = false) }
             }
         }
     }
 
+    /**
+     * Reports what was actually deleted. The rescan drops records for files that left
+     * MediaStore, so any requested file still present was not deleted — whatever the
+     * delete call or system dialog claimed.
+     */
     fun onDeleteCompleted() {
+        val request = pendingDelete ?: return
+        pendingDelete = null
         viewModelScope.launch {
             runCatching { repository.scanAndReconcile() }
-            ui.update { it.copy(reclaimCandidates = reclaimEngine.candidates(), message = "Space reclaimed") }
+            val notDeleted = request.ids.count { repository.getById(it) != null }
+            ui.update { it.copy(message = deleteOutcomeMessage(request.ids.size, notDeleted, request.skipped)) }
         }
+    }
+
+    /** Android 8–10: the user declined the storage permission that deleting requires. */
+    fun onDeletePermissionDenied() {
+        pendingDelete = null
+        ui.update { it.copy(message = "Nothing deleted — on this Android version, deleting needs storage access") }
     }
 
     fun clearMessage() = ui.update { it.copy(message = null) }

@@ -39,6 +39,9 @@ GoatTidi talks only to Google Drive, directly from your phone. There is no serve
 - A Google account with Drive
 - To build it yourself: JDK 17 and the Android SDK (API 35)
 
+> [!WARNING]
+> **Android 8–10 are untested.** GoatTidi has only been tested on Android 15 and 16. Older versions take different code paths, most notably for **Free up space**: before Android 11 there's no system delete dialog, so GoatTidi asks for storage access and deletes files itself. Expect possible problems there, e.g. the storage prompt not appearing or files not being deleted. The app checks afterwards and reports what was actually deleted, so it won't claim space was freed when it wasn't. Reports from those versions are welcome.
+
 GoatTidi isn't in an app store: you build it from source and install it on your own phone. Drive sign-in only works for a build whose signing key is registered in your own (free) Google Cloud project, so the debug APKs that CI attaches to each run are good for trying the UI but can't connect to Drive.
 
 ## Building

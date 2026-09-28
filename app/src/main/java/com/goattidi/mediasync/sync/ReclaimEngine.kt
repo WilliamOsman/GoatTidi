@@ -33,8 +33,7 @@ class ReclaimEngine @Inject constructor(
     }
 
     /** Verified-synced files, biggest first — candidates for the free-up-space view. */
-    suspend fun candidates(): List<SyncRecord> =
-        repository.syncedRecords().sortedByDescending { it.sizeBytes }
+    suspend fun candidates(): List<SyncRecord> = candidatesFrom(repository.syncedRecords())
 
     // IO dispatcher: hashing streams entire files and must never run on Main
     suspend fun confirmSafeToDelete(
@@ -75,5 +74,14 @@ class ReclaimEngine @Inject constructor(
             return Gate.Blocked("Local file was modified since upload — current bytes are not on Drive")
         }
         return Gate.Safe
+    }
+
+    companion object {
+        /**
+         * The free-up-space list from any set of records. The screen derives it from the live
+         * record Flow, so it updates the moment a Verify, upload, or delete changes a status.
+         */
+        fun candidatesFrom(records: List<SyncRecord>): List<SyncRecord> =
+            records.filter { it.status == SyncStatus.SYNCED }.sortedByDescending { it.sizeBytes }
     }
 }

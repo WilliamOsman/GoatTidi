@@ -122,6 +122,22 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
     }
 
     var pendingLegacyDelete by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var legacyDeleteAwaitingPermission by remember { mutableStateOf<List<Uri>>(emptyList()) }
+
+    // Android 8–10 delete through the ContentResolver, which needs write access to shared
+    // storage (WRITE_EXTERNAL_STORAGE, requested only when a delete is confirmed)
+    fun deleteLegacy(uris: List<Uri>) {
+        uris.forEach { runCatching { context.contentResolver.delete(it, null, null) } }
+        viewModel.onDeleteCompleted() // checks which files are really gone
+    }
+
+    val writePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val uris = legacyDeleteAwaitingPermission
+        legacyDeleteAwaitingPermission = emptyList()
+        if (granted) deleteLegacy(uris) else viewModel.onDeletePermissionDenied()
+    }
 
     LaunchedEffect(Unit) {
         viewModel.deleteRequests.collect { uris ->
@@ -139,9 +155,17 @@ fun AppRoot(viewModel: MainViewModel = hiltViewModel()) {
         LegacyDeleteConfirm(
             count = pendingLegacyDelete.size,
             onConfirm = {
-                pendingLegacyDelete.forEach { runCatching { context.contentResolver.delete(it, null, null) } }
+                val uris = pendingLegacyDelete
                 pendingLegacyDelete = emptyList()
-                viewModel.onDeleteCompleted()
+                val canWrite = ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.WRITE_EXTERNAL_STORAGE
+                ) == PackageManager.PERMISSION_GRANTED
+                if (canWrite) {
+                    deleteLegacy(uris)
+                } else {
+                    legacyDeleteAwaitingPermission = uris
+                    writePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                }
             },
             onDismiss = { pendingLegacyDelete = emptyList() }
         )
@@ -259,7 +283,9 @@ private fun OverflowMenu(items: List<Pair<String, () -> Unit>>) {
 
 /**
  * Below Android 11 there is no system delete dialog — contentResolver.delete is
- * immediate — so the confirmation §4.5 requires has to come from the app.
+ * immediate — so the confirmation §4.5 requires has to come from the app. Deleting
+ * media the app didn't create also needs WRITE_EXTERNAL_STORAGE there, requested after
+ * this confirmation rather than at launch.
  */
 @Composable
 private fun LegacyDeleteConfirm(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit) {
