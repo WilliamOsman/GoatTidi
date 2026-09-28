@@ -1,0 +1,17 @@
+GoatTidi
+Copyright (c) 2026 William Osman
+
+The source code in this repository is licensed under the MIT License (see LICENSE).
+
+The GoatTidi artwork is NOT covered by the MIT License:
+
+  GoatTidi_icon.png
+  app/src/main/res/mipmap-*/ic_launcher_foreground.png
+
+Copyright (c) 2026 William Osman. All rights reserved. You may not copy, modify,
+or redistribute this artwork, including as part of a modified or forked build of
+the app, without written permission.
+
+Forks and redistributed builds must replace the launcher icon with their own
+artwork. The MIT-licensed code, including the adaptive-icon XML and the
+background color resource, may be reused freely under the MIT License.
