@@ -37,30 +37,30 @@ GoatTidi talks only to Google Drive, directly from your phone. There is no serve
 - A Google account with Drive
 - To build it yourself: JDK 17 and the Android SDK (API 35)
 
-GoatTidi isn't on the Play Store; you build and sideload it yourself. Drive sign-in only works for an APK whose signing key is registered with your own Google Cloud OAuth client (next sections). The debug APKs that CI attaches to each run are signed with a throwaway key, so they're useful for trying the UI but can't connect to Drive.
+GoatTidi isn't in an app store: you build it from source and install it on your own phone. Drive sign-in only works for a build whose signing key is registered in your own (free) Google Cloud project, so the debug APKs that CI attaches to each run are good for trying the UI but can't connect to Drive.
 
 ## Building
+
+**[BUILDING.md](BUILDING.md)** walks through everything: installing Java and the Android SDK, building, the one-time Google Cloud setup, and installing on your phone.
+
+To have an AI coding agent (Claude Code, Codex, Cursor, …) do it for you, open it in an empty folder and paste:
+
+```text
+Build and install the GoatTidi Android app on my phone from source.
+Clone https://github.com/WilliamOsman/GoatTidi and follow its BUILDING.md step by step.
+Ask me before installing anything on this computer. When a step needs me (Google Cloud
+setup, phone settings), stop, give me exact instructions, and wait for me to confirm.
+```
+
+The agent handles the computer side and tells you exactly what to click in Google Cloud and on your phone.
+
+For development:
 
 ```sh
 ./gradlew assembleDebug        # APK in app/build/outputs/apk/debug/
 ./gradlew testDebugUnitTest    # unit tests (Robolectric + MockWebServer, no device needed)
 ./gradlew lintDebug
 ```
-
-## Google Cloud setup (required for Drive access)
-
-Drive sign-in needs an OAuth client tied to *your* build's signing key. Each of these steps silently breaks uploads if missed:
-
-1. **Create a Google Cloud project and enable the Google Drive API** (*APIs & Services → Library → Google Drive API → Enable*). Calls fail with `SERVICE_DISABLED` until it propagates, which takes a minute or two.
-2. **Create an Android OAuth client** (*Credentials → Create credentials → OAuth client ID → Android*) with package name `com.goattidi.mediasync` and the SHA-1 of the key that signs your APK. For debug builds:
-   ```sh
-   ./gradlew signingReport
-   ```
-   Register both your debug and release SHA-1s if you use both. It must be an **Android** client — not Web or Desktop.
-3. **Configure the OAuth consent screen.** In *Testing* mode, add your Google account under *Test users*. Google can expire authorizations for testing-mode apps after 7 days — if Drive keeps asking you to reconnect weekly, publishing the consent screen avoids it.
-4. **Scopes:** `drive.file` needs no Google review. `drive.readonly` is a *restricted* scope: fine for your own test users, but publishing an app that requests it requires Google's verification.
-
-No client ID or secret goes in the code — Android OAuth clients are matched by package name and signing key.
 
 ## Project layout
 
